@@ -124,4 +124,4 @@ def render_json(analysis: Analysis) -> str:
 
 def render_paths(analysis: Analysis) -> str:
     """One filesystem path per line, for piping into a deletion tool."""
-    return "\n".join(str(i.path) for i in analysis.unused() if i.path.exists())
+    return "\n".join(str(p) for i in analysis.unused() for p in (i.path, *i.shadowed) if p.exists())

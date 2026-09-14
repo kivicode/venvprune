@@ -81,7 +81,7 @@ class Analysis:
         return native.extension_modules(self.modules)
 
     def unused_bytes(self) -> int:
-        return sum(i.path.stat().st_size for i in self.unused() if i.path.exists() and i.path.is_file())
+        return sum(p.stat().st_size for i in self.unused() for p in (i.path, *i.shadowed) if p.is_file())
 
     def script_distributions(self) -> set[str]:
         """Distributions advertising console/GUI scripts, i.e. meant to be run as programs.

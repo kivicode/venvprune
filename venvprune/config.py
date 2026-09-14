@@ -36,6 +36,7 @@ _KEYS = {
     "strict-dynamic",
     "keep-distributions",
     "prune-script-packages",
+    "strip-pycache",
     "format",
     "progress",
     "tree-depth",

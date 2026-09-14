@@ -93,9 +93,13 @@ def index_root(root: Path, origin: Origin, prefix: str = "", tracker: Tracker | 
         stub_only = path.suffix == ".pyi"
         existing = modules.get(name)
         if existing is not None:
-            # A real .py always wins over a stub; otherwise first-seen root wins.
+            # A real .py always wins over a stub; otherwise first-seen wins. The loser is
+            # still on disk, so it is recorded rather than dropped.
             if existing.is_stub_only and not stub_only:
-                modules[name] = ModuleInfo(name, path, origin, is_pkg, stub_only)
+                shadowed = [existing.path, *existing.shadowed]
+                modules[name] = ModuleInfo(name, path, origin, is_pkg, stub_only, shadowed)
+            elif path != existing.path:
+                existing.shadowed.append(path)
             continue
         modules[name] = ModuleInfo(name, path, origin, is_pkg, stub_only)
 

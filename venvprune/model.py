@@ -108,6 +108,11 @@ class ModuleInfo:
     origin: Origin
     is_package: bool = False
     is_stub_only: bool = False
+    shadowed: list[Path] = field(default_factory=list)
+    """Other files backing the same dotted name (a `.so` beside a `.py`, a `.pyi` stub).
+
+    Only `path` is analysed, but every one of these must go when the module is pruned.
+    """
     edges: list[ImportEdge] = field(default_factory=list)
     hints: list[DynamicHint] = field(default_factory=list)
     parse_error: str | None = None

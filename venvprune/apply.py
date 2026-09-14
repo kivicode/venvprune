@@ -50,6 +50,7 @@ def build_plan(
     whole_distributions: bool = True,
     include_libs: bool = True,
     prune_script_packages: bool = False,
+    strip_pycache: bool = False,
     reporter: progress.Reporter | None = None,
 ) -> Plan:
     reporter = reporter or progress.NullReporter()
@@ -83,11 +84,11 @@ def build_plan(
     # and anything belonging to a distribution spared for its console scripts.
     spared = {projectmeta.canonical(d) for d in plan.kept_for_scripts}
     for info in analysis.unused():
-        if not info.path.is_file() or _inside(info.path, dist_dirs):
-            continue
         if spared and analysis.dist_of.get(info.name) in spared:
             continue
-        seen.add(info.path)
+        for path in (info.path, *info.shadowed):
+            if path.is_file() and not _inside(path, dist_dirs):
+                seen.add(path)
 
     if include_libs:
         unused_names = {u.name for u in analysis.unused()}
@@ -106,9 +107,32 @@ def build_plan(
             if not lib.referenced_by and not _inside(lib.path, dist_dirs):
                 seen.add(lib.path)
 
-    plan.files = sorted(seen)
+    # A pruned module leaves its bytecode behind; it is dead weight and, for a namespace
+    # package, can still be found by the import system.
+    seen |= _cached_bytecode(seen)
+    if strip_pycache:
+        cache_task = reporter.task("Collecting bytecode caches", total=None)
+        for site in analysis.site_dirs:
+            for cache in site.rglob("__pycache__"):
+                cache_task.advance()
+                if not _inside(cache, dist_dirs):
+                    dist_dirs.add(cache)
+        cache_task.done()
+
+    plan.files = sorted(p for p in seen if not _inside(p, dist_dirs))
     plan.dirs = sorted(dist_dirs)
     return plan
+
+
+def _cached_bytecode(files: set[Path]) -> set[Path]:
+    out: set[Path] = set()
+    for path in files:
+        if path.suffix not in {".py", ".pyc"}:
+            continue
+        cache = path.parent / "__pycache__"
+        if cache.is_dir():
+            out.update(p for p in cache.glob(f"{path.stem}.*.pyc") if p.is_file())
+    return out
 
 
 def _inside(path: Path, directories: set[Path]) -> bool:

@@ -141,3 +141,32 @@ def test_invalid_toml_is_an_error(tmp_path: Path, capsys):
     write(tmp_path / "bad.toml", "[tool.venvprune\nkeep = ")
     assert main(["--config", str(tmp_path / "bad.toml")]) == 2
     assert "not valid TOML" in capsys.readouterr().err
+
+
+def test_stale_bytecode_goes_with_the_module(tmp_path: Path):
+    from venvprune.apply import build_plan
+
+    site = tmp_path / "venv" / "lib" / "python3.12" / "site-packages"
+    write(site / "pkg" / "__init__.py", "")
+    write(site / "pkg" / "dead.py", "")
+    write(site / "pkg" / "__pycache__" / "dead.cpython-312.pyc", "x")
+    write(site / "pkg" / "__pycache__" / "__init__.cpython-312.pyc", "x")
+    write(tmp_path / "code" / "app.py", "import pkg\n")
+
+    planned = {p.name for p in build_plan(analyze([tmp_path / "code"], tmp_path / "venv")).files}
+    assert "dead.py" in planned
+    assert "dead.cpython-312.pyc" in planned, "its bytecode goes too"
+    assert "__init__.cpython-312.pyc" not in planned, "the live module keeps its cache"
+
+
+def test_strip_pycache_removes_every_cache(tmp_path: Path):
+    from venvprune.apply import build_plan
+
+    site = tmp_path / "venv" / "lib" / "python3.12" / "site-packages"
+    write(site / "pkg" / "__init__.py", "")
+    write(site / "pkg" / "__pycache__" / "__init__.cpython-312.pyc", "x")
+    write(tmp_path / "code" / "app.py", "import pkg\n")
+
+    analysis = analyze([tmp_path / "code"], tmp_path / "venv")
+    assert not build_plan(analysis).dirs
+    assert any(d.name == "__pycache__" for d in build_plan(analysis, strip_pycache=True).dirs)

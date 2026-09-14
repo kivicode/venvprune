@@ -115,3 +115,36 @@ def test_plain_dylib_is_not_an_importable_module(venv: Path, tmp_path: Path):
     write(tmp_path / "code" / "app.py", "import pkg\n")
     analysis = analyze([tmp_path / "code"], tmp_path / "venv")
     assert "pkg.libextra" not in analysis.modules
+
+
+def test_all_files_backing_one_module_are_pruned(venv: Path, tmp_path: Path):
+    """A `.so` beside a `.py` is the same module: pruning it must take both files."""
+    from venvprune.apply import build_plan
+
+    write(venv / "pkg" / "__init__.py", "")
+    write(venv / "pkg" / "dead.py", "")
+    write_blob(venv / "pkg" / "dead.cpython-312-darwin.so", ["x"])
+    write(venv / "pkg" / "dead.pyi", "")
+    write(tmp_path / "code" / "app.py", "import pkg\n")
+
+    analysis = analyze([tmp_path / "code"], tmp_path / "venv")
+    info = analysis.modules["pkg.dead"]
+    assert len(info.shadowed) == 2, "the other two files are recorded, not dropped"
+
+    planned = {p.name for p in build_plan(analysis).files}
+    assert planned == {"dead.py", "dead.cpython-312-darwin.so", "dead.pyi"}
+
+
+def test_pruning_is_a_fixpoint_with_multi_file_modules(venv: Path, tmp_path: Path):
+    from venvprune.apply import build_plan, execute
+
+    write(venv / "pkg" / "__init__.py", "")
+    write(venv / "pkg" / "dead.py", "")
+    write_blob(venv / "pkg" / "dead.cpython-312-darwin.so", ["x"])
+    write(tmp_path / "code" / "app.py", "import pkg\n")
+
+    first = analyze([tmp_path / "code"], tmp_path / "venv")
+    execute(build_plan(first), first.site_dirs, manifest_dir=tmp_path)
+
+    second = analyze([tmp_path / "code"], tmp_path / "venv")
+    assert not build_plan(second).files, "a second pass must find nothing left"

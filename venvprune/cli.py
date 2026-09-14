@@ -108,6 +108,7 @@ def build_parser() -> argparse.ArgumentParser:
     delete.add_argument("--apply", action="store_true", help="delete unused modules and whole unused distributions")
     delete.add_argument("--dry-run", action="store_true", help="print the removal plan without deleting")
     _flag(delete, "keep-distributions", "remove only individual files, never a whole dist-info")
+    _flag(delete, "strip-pycache", "also remove every __pycache__ directory in the venv")
     _flag(delete, "prune-script-packages", "also remove unreachable distributions that install a command")
 
     tracing = parser.add_argument_group("runtime tracing")
@@ -224,6 +225,7 @@ def main(argv: list[str] | None = None) -> int:
             analysis,
             whole_distributions=not config_mod.pick(args.keep_distributions, cfg, "keep-distributions", False),
             prune_script_packages=config_mod.pick(args.prune_script_packages, cfg, "prune-script-packages", False),
+            strip_pycache=config_mod.pick(args.strip_pycache, cfg, "strip-pycache", False),
             reporter=reporter,
         )
         plan.measure()  # sizes must be read before the files are deleted

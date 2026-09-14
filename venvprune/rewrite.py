@@ -13,6 +13,7 @@ from __future__ import annotations
 import ast
 import copy
 import difflib
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -235,7 +236,7 @@ def _build_definition_rewrite(
             out.append(replace[index])
         elif index not in drop:
             out.append(line)
-    patched = "".join(out)
+    patched = _tidy("".join(out))
     return DefinitionRewrite(
         module=module,
         path=path,
@@ -244,6 +245,23 @@ def _build_definition_rewrite(
         original=original,
         patched=patched if patched.strip() else "",
     )
+
+
+def _tidy(text: str) -> str:
+    """Collapse the blank-line runs left by removing top-level blocks.
+
+    Guarded by comparing parse trees: a blank line inside a multi-line string is part of the
+    data, so if the collapse changes the AST at all it is discarded.
+    """
+    if not text.strip():
+        return ""
+    collapsed = re.sub(r"\n{4,}", "\n\n\n", text).rstrip("\n") + "\n"
+    try:
+        if ast.dump(ast.parse(collapsed)) != ast.dump(ast.parse(text)):
+            return text
+    except SyntaxError:
+        return text
+    return collapsed
 
 
 def _narrow_statement(node: ast.stmt, live: set[str]) -> tuple[range | None, str | None]:

@@ -9,6 +9,7 @@ from collections.abc import Iterator
 from pathlib import Path
 
 from venvprune.model import Distribution, ModuleInfo, Origin
+from venvprune.progress import Tracker
 
 _SKIP_DIRS = {
     "__pycache__",
@@ -77,10 +78,12 @@ def _module_name(root: Path, path: Path) -> str | None:
     return ".".join(parts)
 
 
-def index_root(root: Path, origin: Origin, prefix: str = "") -> dict[str, ModuleInfo]:
+def index_root(root: Path, origin: Origin, prefix: str = "", tracker: Tracker | None = None) -> dict[str, ModuleInfo]:
     """Map dotted module name -> ModuleInfo for every module found under `root`."""
     modules: dict[str, ModuleInfo] = {}
     for path in _iter_python_files(root):
+        if tracker is not None:
+            tracker.advance()
         name = _module_name(root, path)
         if name is None:
             continue
@@ -106,7 +109,7 @@ def index_root(root: Path, origin: Origin, prefix: str = "") -> dict[str, Module
     return modules
 
 
-def index_code_roots(roots: list[Path]) -> dict[str, ModuleInfo]:
+def index_code_roots(roots: list[Path], tracker: Tracker | None = None) -> dict[str, ModuleInfo]:
     modules: dict[str, ModuleInfo] = {}
     for root in roots:
         root = root.resolve()
@@ -118,17 +121,19 @@ def index_code_roots(roots: list[Path]) -> dict[str, ModuleInfo]:
             base, keep = root.parent, root.name
         else:
             base, keep = root, None
-        for name, info in index_root(base, Origin.LOCAL).items():
+        for name, info in index_root(base, Origin.LOCAL, tracker=tracker).items():
             if keep is not None and name.split(".")[0] != keep:
                 continue
             modules.setdefault(name, info)
     return modules
 
 
-def index_venv(site_dirs: list[Path]) -> tuple[dict[str, ModuleInfo], dict[str, Distribution]]:
+def index_venv(
+    site_dirs: list[Path], tracker: Tracker | None = None
+) -> tuple[dict[str, ModuleInfo], dict[str, Distribution]]:
     modules: dict[str, ModuleInfo] = {}
     for site in site_dirs:
-        for name, info in index_root(site.resolve(), Origin.SITE).items():
+        for name, info in index_root(site.resolve(), Origin.SITE, tracker=tracker).items():
             modules.setdefault(name, info)
     return modules, read_distributions(site_dirs)
 

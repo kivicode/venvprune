@@ -116,7 +116,7 @@ def reporter(enabled: bool = True) -> Iterator[Reporter]:
         BarColumn(bar_width=None),
         MofNCompleteColumn(),
         TimeElapsedColumn(),
-        transient=True,
+        transient=False,
         refresh_per_second=12,
     )
     with progress:

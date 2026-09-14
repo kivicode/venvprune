@@ -11,8 +11,9 @@ import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from venvprune import native, projectmeta
+from venvprune import native, progress, projectmeta
 from venvprune.analyzer import Analysis
+from venvprune.progress import Tracker
 
 MANIFEST_NAME = "venvprune-manifest.json"
 
@@ -25,12 +26,20 @@ class Plan:
     kept_for_scripts: list[str] = field(default_factory=list)
     """Unreachable distributions spared because they install a command."""
 
+    _size: int | None = None
+
+    def measure(self) -> int:
+        return self.total_bytes
+
     @property
     def total_bytes(self) -> int:
-        total = sum(p.stat().st_size for p in self.files if p.is_file())
-        for directory in self.dirs:
-            total += sum(p.stat().st_size for p in directory.rglob("*") if p.is_file())
-        return total
+        """Measured once: the files are gone by the time `execute` wants to report them."""
+        if self._size is None:
+            total = sum(p.stat().st_size for p in self.files if p.is_file())
+            for directory in self.dirs:
+                total += sum(p.stat().st_size for p in directory.rglob("*") if p.is_file())
+            self._size = total
+        return self._size
 
     def __bool__(self) -> bool:
         return bool(self.files or self.dirs)
@@ -41,7 +50,9 @@ def build_plan(
     whole_distributions: bool = True,
     include_libs: bool = True,
     prune_script_packages: bool = False,
+    reporter: progress.Reporter | None = None,
 ) -> Plan:
+    reporter = reporter or progress.NullReporter()
     plan = Plan()
     seen: set[Path] = set()
     dead_dists = set(analysis.fully_unused_distributions()) if whole_distributions else set()
@@ -79,12 +90,18 @@ def build_plan(
         seen.add(info.path)
 
     if include_libs:
+        unused_names = {u.name for u in analysis.unused()}
         kept = [
             i.path
             for n, i in analysis.extension_modules().items()
-            if n in analysis.reach.reached and n not in {u.name for u in analysis.unused()}
+            if n in analysis.reach.reached and n not in unused_names
         ]
-        libs = native.attribute_libraries(kept, native.bundled_libraries(analysis.site_dirs))
+        lib_task = reporter.task("Scanning bundled libraries", total=None)
+        bundled = native.bundled_libraries(analysis.site_dirs, lib_task)
+        lib_task.done()
+        link_task = reporter.task("Reading link tables", total=len(kept) if bundled else 0)
+        libs = native.attribute_libraries(kept, bundled, link_task)
+        link_task.done()
         for lib in libs.values():
             if not lib.referenced_by and not _inside(lib.path, dist_dirs):
                 seen.add(lib.path)
@@ -120,8 +137,11 @@ def _metadata_dirs(name: str, version: str, site_dirs: list[Path]) -> set[Path]:
     return out
 
 
-def execute(plan: Plan, site_dirs: list[Path], manifest_dir: Path | None = None) -> Path:
+def execute(
+    plan: Plan, site_dirs: list[Path], manifest_dir: Path | None = None, reporter: progress.Reporter | None = None
+) -> Path:
     """Delete everything in the plan, writing a manifest of what went first."""
+    reporter = reporter or progress.NullReporter()
     target = (manifest_dir or site_dirs[0]) / MANIFEST_NAME
     manifest = {
         "site_packages": [str(d) for d in site_dirs],
@@ -133,17 +153,25 @@ def execute(plan: Plan, site_dirs: list[Path], manifest_dir: Path | None = None)
     }
     target.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
 
+    task = reporter.task("Removing", total=len(plan.dirs) + len(plan.files))
     for directory in plan.dirs:
         shutil.rmtree(directory, ignore_errors=True)
+        task.advance()
     for path in plan.files:
         path.unlink(missing_ok=True)
-    _prune_empty_dirs(site_dirs)
+        task.advance()
+    task.done()
+    tidy = reporter.task("Tidying empty directories", total=None)
+    _prune_empty_dirs(site_dirs, tidy)
+    tidy.done()
     return target
 
 
-def _prune_empty_dirs(site_dirs: list[Path]) -> None:
+def _prune_empty_dirs(site_dirs: list[Path], tracker: Tracker | None = None) -> None:
     for site in site_dirs:
         for path in sorted(site.rglob("*"), key=lambda p: len(p.parts), reverse=True):
+            if tracker is not None:
+                tracker.advance()
             if path.is_dir() and not any(path.iterdir()):
                 path.rmdir()
 

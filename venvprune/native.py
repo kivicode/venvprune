@@ -20,6 +20,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from venvprune.model import ModuleInfo, Origin
+from venvprune.progress import Tracker
 
 EXT_SUFFIXES = (".so", ".pyd")
 _LIB_DIRS = (".dylibs", ".libs")
@@ -163,11 +164,13 @@ class BundledLib:
         return self.path.stat().st_size if self.path.is_file() else 0
 
 
-def bundled_libraries(site_dirs: list[Path]) -> dict[str, BundledLib]:
+def bundled_libraries(site_dirs: list[Path], tracker: Tracker | None = None) -> dict[str, BundledLib]:
     """Every shared library sitting in a wheel's bundled-library directory, by basename."""
     out: dict[str, BundledLib] = {}
     for site in site_dirs:
         for path in site.rglob("*"):
+            if tracker is not None:
+                tracker.advance()
             if not path.is_file() or not _in_lib_dir(path):
                 continue
             # `.so.6`-style version suffixes are shared libraries too.
@@ -176,9 +179,16 @@ def bundled_libraries(site_dirs: list[Path]) -> dict[str, BundledLib]:
     return out
 
 
-def attribute_libraries(kept_extensions: Iterable[Path], libs: dict[str, BundledLib]) -> dict[str, BundledLib]:
+def attribute_libraries(
+    kept_extensions: Iterable[Path], libs: dict[str, BundledLib], tracker: Tracker | None = None
+) -> dict[str, BundledLib]:
     """Mark which bundled libraries are still reachable from an extension that survives."""
+    if not libs:
+        # Nothing to attribute, so skip the one `otool`/`objdump` call per extension.
+        return libs
     for ext in kept_extensions:
+        if tracker is not None:
+            tracker.advance()
         for link in linked_libraries(ext):
             name = link.rsplit("/", 1)[-1]
             if name in libs:

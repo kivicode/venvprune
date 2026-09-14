@@ -192,10 +192,12 @@ def main(argv: list[str] | None = None) -> int:
             )
 
     show_progress = config_mod.pick(args.progress, cfg, "progress", "auto") == "auto"
+    reporter_ctx = progress.reporter(show_progress)
+    reporter = reporter_ctx.__enter__()
     try:
-        with progress.reporter(show_progress) as reporter:
-            analysis = analyze(code, venv, options, trace_result, reporter)
+        analysis = analyze(code, venv, options, trace_result, reporter)
     except ValueError as exc:
+        reporter_ctx.__exit__(None, None, None)
         print(f"venvprune: {exc}", file=sys.stderr)
         return 2
 
@@ -222,12 +224,18 @@ def main(argv: list[str] | None = None) -> int:
             analysis,
             whole_distributions=not config_mod.pick(args.keep_distributions, cfg, "keep-distributions", False),
             prune_script_packages=config_mod.pick(args.prune_script_packages, cfg, "prune-script-packages", False),
+            reporter=reporter,
         )
+        plan.measure()  # sizes must be read before the files are deleted
+        manifest = apply_mod.execute(plan, analysis.site_dirs, reporter=reporter) if args.apply else None
+        reporter_ctx.__exit__(None, None, None)
         print(apply_mod.render_plan(plan))
-        if args.apply:
-            manifest = apply_mod.execute(plan, analysis.site_dirs)
+
+        if manifest is not None:
             print(f"venvprune: removed; manifest written to {manifest}", file=sys.stderr)
         return 0
+
+    reporter_ctx.__exit__(None, None, None)
 
     if output == "defs":
         print(

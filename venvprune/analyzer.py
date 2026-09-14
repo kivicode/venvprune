@@ -122,9 +122,8 @@ def analyze(
         raise ValueError(f"no site-packages directory found under {venv}")
 
     index_task = reporter.task("Indexing modules", total=None)
-    site_modules, dists = discovery.index_venv(site_dirs)
-    local_modules = discovery.index_code_roots(code_roots)
-    index_task.advance(len(site_modules) + len(local_modules))
+    site_modules, dists = discovery.index_venv(site_dirs, index_task)
+    local_modules = discovery.index_code_roots(code_roots, index_task)
     index_task.done()
 
     site_paths = {d.resolve() for d in site_dirs}

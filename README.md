@@ -100,6 +100,25 @@ Wheels ship binaries that no AST pass can see into:
   extensions that link them (`otool -L` / `objdump -p`), so libraries no surviving extension
   needs are listed.
 
+## What it will not remove
+
+Some things are reachable only by mechanisms no import graph can see. These are protected by
+default, and each one was learned by pruning a real project and then running it:
+
+- **Distributions advertising entry points.** A `console_scripts` launcher imports the package;
+  a `pytest11` or application-defined group is found by a framework scanning metadata. Nothing
+  imports either. Pruning `pytest-asyncio` does not fail — the async tests simply stop being
+  collected. `--prune-script-packages` removes them anyway.
+- **`pkg/__main__.py`** of a surviving package, which is what `python -m pkg` runs.
+- **Modules named by a `.pth` file**, which the interpreter executes at startup.
+- **Bundled libraries a surviving library links**, walked transitively: `libxcb` needs
+  `libXau`, and only the extension-to-library hop is visible from the module graph.
+- **Anything in `keep`** — for a package invoked as a subprocess, or a plugin named in a
+  config file. Patterns that match nothing are reported rather than ignored.
+
+Sizes are reported per module, and every file backing one goes together: `cu2qu.py`,
+`cu2qu.cpython-312-darwin.so` and `cu2qu.pyi` are one module, not three.
+
 ## Dev dependencies (`--prune-dev`)
 
 Distributions declared only in a dev group are not needed to run the code, so they are pruned

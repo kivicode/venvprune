@@ -54,9 +54,19 @@ that link them.
 Remaining:
 
 - [ ] Parse the import table properly (Mach-O / ELF symbol and relocation entries for
-      `PyImport_*`) instead of matching every plausible string against the index.
+      `PyImport_*`). String matching currently needs three passes of decreasing precision,
+      the loosest being "a sibling's name appears anywhere in the binary" — which is how
+      `lxml._elementpath` is found inside the mangled symbol `___pyx_v_4lxml_5etree__elementpath`.
 - [ ] Detect SIMD/CUDA variant sets that share one ABI tag but differ by runtime dispatch.
-- [ ] Transitively prune bundled libraries that only other pruned libraries link against.
+- [x] Follow bundled library dependencies transitively, so a library needed only by another
+      library is not deleted out from under it.
+
+## Verified against
+
+A 12k-module, 770 MiB virtualenv (scientific stack: numpy, scipy, pandas, rdkit, PIL,
+onnxruntime, lxml, matplotlib) with a plugin system and an LSP that shells out to `ruff` and
+`ty`. Pruned, then re-run: the application imports and its 4813-test suite collects identically,
+and a second pass finds nothing left to remove.
 
 ## Cross-cutting
 

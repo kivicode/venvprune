@@ -25,6 +25,8 @@ Remaining:
       name is used only in annotation position and the module can take
       `from __future__ import annotations`, then move the import into a `TYPE_CHECKING` block.
 - [ ] Prune unused methods within a class, not just top-level definitions.
+- [ ] Scope-aware references: a local variable that shadows an imported name currently counts
+      as a use of it, which over-keeps (see `requests/__init__.py`'s `major, minor, patch`).
 - [ ] Re-run the project's own tests after applying a rewrite, as an automatic verification gate.
 
 ## Phase 3 — dynamic-import safety gating ✅

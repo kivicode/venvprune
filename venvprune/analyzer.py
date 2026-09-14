@@ -6,7 +6,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from venvprune import astscan, discovery, native, projectmeta
+from venvprune import astscan, discovery, native, progress, projectmeta
 from venvprune.graph import ModuleGraph, Options
 from venvprune.model import (
     Distribution,
@@ -94,14 +94,19 @@ def analyze(
     venv: Path,
     options: Options | None = None,
     trace: TraceResult | None = None,
+    reporter: progress.Reporter | None = None,
 ) -> Analysis:
     options = options or Options()
+    reporter = reporter or progress.NullReporter()
     site_dirs = discovery.find_site_packages(venv)
     if not site_dirs:
         raise ValueError(f"no site-packages directory found under {venv}")
 
+    index_task = reporter.task("Indexing modules", total=None)
     site_modules, dists = discovery.index_venv(site_dirs)
     local_modules = discovery.index_code_roots(code_roots)
+    index_task.advance(len(site_modules) + len(local_modules))
+    index_task.done()
 
     site_paths = {d.resolve() for d in site_dirs}
     merged: dict[str, ModuleInfo] = dict(site_modules)
@@ -111,15 +116,20 @@ def analyze(
             continue
         merged[name] = info
 
-    astscan.scan_all(merged)
+    scan_task = reporter.task("Parsing", total=len(merged))
+    astscan.scan_all(merged, scan_task)
+    scan_task.done()
     if options.scan_binaries:
-        _add_binary_edges(merged)
+        _add_binary_edges(merged, reporter)
     graph = ModuleGraph(merged, discovery.stdlib_module_names(), options)
 
+    walk_task = reporter.task("Resolving imports", total=None)
     roots = graph.local_roots() + [r for r in options.extra_roots if r in merged]
     roots += _entry_point_roots(merged, dists, options)
     roots += [name for name in discovery.pth_imports(site_dirs) if name in merged]
     reach = graph.reachable(roots, options)
+    walk_task.advance(len(reach.reached))
+    walk_task.done()
 
     traced: set[str] = set()
     if trace is not None:
@@ -145,10 +155,13 @@ def analyze(
     return analysis
 
 
-def _add_binary_edges(modules: dict[str, ModuleInfo]) -> None:
+def _add_binary_edges(modules: dict[str, ModuleInfo], reporter: progress.Reporter) -> None:
     """Give each extension module the imports its string table reveals, as lazy edges."""
     names = set(modules)
-    for name, info in native.extension_modules(modules).items():
+    extensions = native.extension_modules(modules)
+    task = reporter.task("Scanning binaries", total=len(extensions))
+    for name, info in extensions.items():
+        task.advance()
         found = native.imports_from_binary(info.path, names) - {name}
         info.edges = [ImportEdge(name, target, EdgeKind.LAZY, 0, 0) for target in sorted(found) if target != name]
 

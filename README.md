@@ -128,6 +128,15 @@ A distribution nothing reaches goes whole — its package directories, its `dist
 files and its bundled shared libraries — not just the `.py` files the module graph knows about.
 Modules named by a `.pth` file are always kept, since the interpreter runs those at startup.
 
+## Progress
+
+Large virtualenvs take a while (~50 s to parse 11.5k modules), so the slow phases report
+progress on stderr: a `rich` bar when `rich` is installed and stderr is a terminal, one
+rewritten stderr line otherwise, nothing when piped. `--progress never` turns it off.
+
+`rich` is an optional extra (`pip install venvprune[ui]`) rather than a dependency: this tool
+deletes things out of virtualenvs, so it has to keep working when `rich` is not there.
+
 ## Output formats
 
 `text` (default), `tree`, `json`, `paths`, `rewrites`, `defs`, `risk`, `native`. `-v` expands

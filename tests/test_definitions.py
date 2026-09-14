@@ -186,3 +186,26 @@ def test_risky_definitions_are_kept_by_default(tmp_path: Path):
 
     risky = plan_definition_rewrites(analysis, include_risky=True)
     assert {n for p in risky for n in p.names} == {"plugin"}
+
+
+def test_chained_assignment_survives_if_any_target_is_live(tmp_path: Path):
+    """`__version__ = version = "1.0"` must not go just because `version` is dead."""
+    site = tmp_path / "venv" / "lib" / "python3.12" / "site-packages"
+    write(site / "ver" / "__init__.py", "from ver.meta import __version__\n")
+    write(site / "ver" / "meta.py", "__version__ = version = '1.0'\nunused = 2\n")
+    write(tmp_path / "code" / "app.py", "from ver import __version__\n\nprint(__version__)\n")
+    analysis = analyze([tmp_path / "code"], tmp_path / "venv", DEFS)
+    meta = next(p for p in plan_definition_rewrites(analysis) if p.module == "ver.meta")
+    assert "__version__ = version = '1.0'" in meta.patched
+    assert "unused" not in meta.patched
+
+
+def test_assignment_target_is_not_a_reference():
+    """A name that is only bound by a statement is not a use of a same-named import."""
+    table = table_of("from ext import patch\n\n\nmajor, minor, patch = (1, 2, 3)\n")
+    assert "patch" not in table.side_effect_refs
+
+
+def test_augmented_assignment_counts_as_a_read():
+    table = table_of("counter = 0\n\n\ndef bump():\n    global counter\n    counter += 1\n")
+    assert "counter" in table.definitions["bump"][0].refs

@@ -269,7 +269,12 @@ def _free_names(node: ast.AST) -> set[str]:
     out: set[str] = _annotation_names(node)
     for child in ast.walk(node):
         if isinstance(child, ast.Name):
-            out.add(child.id)
+            # A store-only name is a binding, not a read: `a, b = pair` does not use `b`.
+            if isinstance(child.ctx, ast.Load | ast.Del):
+                out.add(child.id)
+        elif isinstance(child, ast.AugAssign) and isinstance(child.target, ast.Name):
+            # `x += 1` reads x before writing it, but the target still carries a Store context.
+            out.add(child.target.id)
         elif isinstance(child, ast.Attribute) and (head := _head_name(child)) is not None:
             out.add(head)
     return out

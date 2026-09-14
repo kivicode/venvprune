@@ -202,8 +202,12 @@ def _build_definition_rewrite(
     original = path.read_text(encoding="utf-8", errors="replace")
     lines = original.splitlines(keepends=True)
 
+    # One statement can bind several names (`__version__ = version = "1.0"`); it may only go
+    # when every name it binds is dead.
+    live_lines = {d.lineno for d in table.all_definitions() if d.name in live}
     drop: set[int] = set()
     replace: dict[int, str] = {}
+    dead = [d for d in dead if d.lineno not in live_lines]
     for definition in dead:
         drop.update(definition.span)
 

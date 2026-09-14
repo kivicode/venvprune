@@ -9,12 +9,16 @@ authors = [
 requires-python = ">=3.12"
 dependencies = []
 
+[project.optional-dependencies]
+ui = ["rich>=13"]
+
 [project.scripts]
 venvprune = "venvprune.cli:main"
 
 [dependency-groups]
 dev = [
     "pytest>=8",
+    "rich>=13",
     "ruff>=0.14",
     "ty>=0.0.1a1",
 ]

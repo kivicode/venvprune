@@ -14,6 +14,7 @@ from venvprune.model import (
     ImportEdge,
     ModuleInfo,
 )
+from venvprune.progress import Tracker
 from venvprune.symbols import build_table
 
 _IMPORTLIB_FUNCS = {"import_module", "__import__", "find_spec", "reload", "invalidate_caches"}
@@ -318,6 +319,8 @@ def scan_module(info: ModuleInfo) -> ModuleInfo:
     return info
 
 
-def scan_all(modules: dict[str, ModuleInfo]) -> None:
+def scan_all(modules: dict[str, ModuleInfo], tracker: Tracker | None = None) -> None:
     for info in modules.values():
         scan_module(info)
+        if tracker is not None:
+            tracker.advance()

@@ -7,7 +7,7 @@ import sys
 from pathlib import Path
 
 from venvprune import apply as apply_mod
-from venvprune import native, report, rewrite, risk, tree
+from venvprune import native, progress, report, rewrite, risk, tree
 from venvprune.analyzer import analyze
 from venvprune.graph import Options
 from venvprune.projectmeta import DEFAULT_DEV_GROUPS
@@ -26,6 +26,12 @@ def build_parser() -> argparse.ArgumentParser:
         choices=("text", "json", "paths", "tree", "rewrites", "defs", "risk", "native"),
         default="text",
         help="output format (default: text)",
+    )
+    parser.add_argument(
+        "--progress",
+        choices=("auto", "never"),
+        default="auto",
+        help="show a progress bar while analysing (default: auto, when stderr is a terminal)",
     )
     parser.add_argument("-v", "--verbose", action="store_true", help="list individual modules and hint sites")
     parser.add_argument(
@@ -184,7 +190,8 @@ def main(argv: list[str] | None = None) -> int:
             )
 
     try:
-        analysis = analyze(args.code, args.venv, options, trace_result)
+        with progress.reporter(args.progress == "auto") as reporter:
+            analysis = analyze(args.code, args.venv, options, trace_result, reporter)
     except ValueError as exc:
         print(f"venvprune: {exc}", file=sys.stderr)
         return 2

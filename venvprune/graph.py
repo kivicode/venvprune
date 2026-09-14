@@ -6,6 +6,7 @@ from collections import deque
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from venvprune import symbols
 from venvprune.model import (
     ArgShape,
     Demand,
@@ -17,6 +18,7 @@ from venvprune.model import (
     Origin,
     Reachability,
 )
+from venvprune.symbols import SymbolTable
 
 _CERTAINTY = {
     EdgeKind.EAGER: 3,
@@ -53,11 +55,18 @@ class Options:
     symbol_precision: bool = False
     """Follow a package `__init__`'s re-export only when the name it binds is actually used."""
 
+    prune_definitions: bool = False
+    """Extend precision inside each module: an import survives only if a live definition uses it."""
+
+    include_risky_definitions: bool = False
+    """Also cut definitions that a decorator or foreign base class might register."""
+
 
 class ModuleGraph:
-    def __init__(self, modules: dict[str, ModuleInfo], stdlib: frozenset[str]) -> None:
+    def __init__(self, modules: dict[str, ModuleInfo], stdlib: frozenset[str], options: Options | None = None) -> None:
         self.modules = modules
         self.stdlib = stdlib
+        self.options = options or Options()
 
     def resolve(self, edge: ImportEdge) -> tuple[list[str], bool]:
         """Return (module names this edge requires, whether anything resolved)."""
@@ -89,6 +98,7 @@ class ModuleGraph:
         return [m for m in self.modules if m == name or m.startswith(prefix)]
 
     def reachable(self, roots: list[str], opts: Options) -> Reachability:
+        self.options = opts
         allowed = {EdgeKind.EAGER}
         if opts.follow_lazy:
             allowed.add(EdgeKind.LAZY)
@@ -136,7 +146,7 @@ class ModuleGraph:
             for edge in info.edges:
                 if edge.kind not in allowed:
                     continue
-                if opts.symbol_precision and not self._edge_is_wanted(info, edge, wanted):
+                if (opts.symbol_precision or opts.prune_definitions) and not self._edge_is_wanted(info, edge, wanted):
                     skipped.setdefault(name, []).append(edge)
                     continue
                 names, ok = self.resolve(edge)
@@ -145,7 +155,7 @@ class ModuleGraph:
                 # An eager import inside a lazily-reached module is still only lazy overall.
                 kind = edge.kind if _CERTAINTY[edge.kind] < _CERTAINTY[incoming] else incoming
                 for target in names:
-                    targets.append((target, kind, edge, self._demand_for(info, edge, target, opts)))
+                    targets.append((target, kind, edge, self._demand_for(info, edge, target, opts, wanted)))
             if opts.dynamic_expands_package:
                 for candidate in self.dynamic_targets(info, opts):
                     targets.append((candidate, EdgeKind.LAZY, None, Demand.ALL))
@@ -210,8 +220,8 @@ class ModuleGraph:
         return ".".join([*base, *([stripped] if stripped else [])])
 
     def _edge_is_wanted(self, info: ModuleInfo, edge: ImportEdge, wanted: set[str] | Demand) -> bool:
-        """Under symbol precision, an `__init__` re-export survives only if someone needs it."""
-        if wanted is Demand.ALL or edge.kind is not EdgeKind.REEXPORT or not info.is_package:
+        """Under symbol precision, an import survives only if something live still needs it."""
+        if wanted is Demand.ALL:
             return True
         if not edge.bindings:
             return True
@@ -219,12 +229,34 @@ class ModuleGraph:
         # package's own structure: neither is a re-export that can be dropped.
         if edge.target == "__future__" or edge.target == info.name or info.name.startswith(f"{edge.target}."):
             return True
-        # `__all__` membership alone does not justify a keep: libraries advertise everything.
-        # A live `from pkg import *` is what forces the whole surface, via Demand.ALL.
-        return any(b.local in wanted or b.local in info.used_attrs for b in edge.bindings)
+        live = self.live_names(info, wanted)
+        if live is None:
+            return True
+        return any(b.local in live for b in edge.bindings)
 
-    def _demand_for(self, info: ModuleInfo, edge: ImportEdge, target: str, opts: Options) -> set[str] | Demand:
-        if not opts.symbol_precision:
+    def live_names(self, info: ModuleInfo, wanted: set[str] | Demand, opts: Options | None = None) -> set[str] | None:
+        """Names still live inside a module, or None when it must be kept whole."""
+        opts = opts or self.options
+        table = info.table
+        if isinstance(table, SymbolTable) and not table.prunable:
+            # A module that can produce names on demand must keep every one of them.
+            return None
+        if opts.prune_definitions and isinstance(table, SymbolTable):
+            return symbols.live_symbols(table, wanted, opts.include_risky_definitions)
+        if info.is_package and isinstance(wanted, set):
+            # The narrower pre-phase-2 rule: only an __init__'s re-exports are negotiable.
+            return set(wanted) | set(info.used_attrs)
+        return None
+
+    def _demand_for(
+        self,
+        info: ModuleInfo,
+        edge: ImportEdge,
+        target: str,
+        opts: Options,
+        wanted: set[str] | Demand = Demand.ALL,
+    ) -> set[str] | Demand:
+        if not (opts.symbol_precision or opts.prune_definitions):
             return Demand.ALL
         if target != edge.target:
             # A parent package or a submodule pulled in alongside the named target.
@@ -232,8 +264,14 @@ class ModuleGraph:
         if edge.is_from:
             if "*" in edge.names:
                 return Demand.ALL
-            # Names that name a submodule are satisfied by importing it, not by the package body.
-            attrs = {b.remote for b in edge.bindings if f"{target}.{b.remote}" not in self.modules}
+            live = self.live_names(info, wanted)
+            # Ask the target only for the names this module still has a live use for; a submodule
+            # is satisfied by importing it, not by anything in the package body.
+            attrs = {
+                b.remote
+                for b in edge.bindings
+                if f"{target}.{b.remote}" not in self.modules and (live is None or b.local in live)
+            }
             return attrs or set()
         binding = edge.bindings[0].local if edge.bindings else None
         used = info.used_attrs.get(binding) if binding else None

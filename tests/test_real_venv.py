@@ -110,3 +110,50 @@ def test_symbol_precision_rewrites_survive_a_real_import(real_env: RealEnv, tmp_
             dest.rename(original)
         for plan in plans:
             plan.path.write_text(plan.original, encoding="utf-8")
+
+
+def test_definition_pruning_survives_a_real_import(real_env: RealEnv, tmp_path):
+    """Cut dead definitions out of real library code, delete what that frees, still run."""
+    import ast as ast_mod
+
+    from venvprune.rewrite import plan_definition_rewrites
+
+    opts = Options(symbol_precision=True, prune_definitions=True)
+    plans = plan_definition_rewrites(analyze([real_env.code], real_env.venv, opts))
+    assert plans, "real libraries should contain code this app cannot reach"
+    try:
+        for plan in plans:
+            ast_mod.parse(plan.patched)
+            plan.apply(backup_suffix="")
+
+        probe = "import sys; sys.path.insert(0, sys.argv[1]); import app; app.cli.name"
+        result = run_trace(real_env.python, ["-c", probe, str(real_env.code.parent)], timeout=120)
+        assert result.returncode == 0, "app broke after definition pruning"
+    finally:
+        for plan in plans:
+            plan.path.write_text(plan.original, encoding="utf-8")
+
+
+def test_apply_removes_whole_distributions(real_env: RealEnv, tmp_path):
+    """A distribution nothing reaches goes entirely: package dir and dist-info alike."""
+    import shutil
+
+    from venvprune.apply import build_plan, execute
+
+    scratch = tmp_path / "clone"
+    shutil.copytree(real_env.venv, scratch, symlinks=True)
+    clone = RealEnv(venv=scratch, code=real_env.code, project=real_env.project)
+
+    analysis = analyze([clone.code], clone.venv)
+    plan = build_plan(analysis)
+    assert "requests" in plan.distributions
+    assert any(p.name.startswith("requests-") and p.suffix == ".dist-info" for p in plan.dirs)
+
+    execute(plan, analysis.site_dirs, manifest_dir=tmp_path)
+    assert not (clone.site / "requests").exists()
+    assert not list(clone.site.glob("requests-*.dist-info"))
+    assert (clone.site / "click").exists(), "a reachable distribution is untouched"
+
+    probe = "import sys; sys.path.insert(0, sys.argv[1]); import app; app.cli.name"
+    result = run_trace(clone.python, ["-c", probe, str(clone.code.parent)], timeout=120)
+    assert result.returncode == 0, "app broke after whole-distribution removal"

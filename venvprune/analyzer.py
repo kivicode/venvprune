@@ -114,10 +114,11 @@ def analyze(
     astscan.scan_all(merged)
     if options.scan_binaries:
         _add_binary_edges(merged)
-    graph = ModuleGraph(merged, discovery.stdlib_module_names())
+    graph = ModuleGraph(merged, discovery.stdlib_module_names(), options)
 
     roots = graph.local_roots() + [r for r in options.extra_roots if r in merged]
     roots += _entry_point_roots(merged, dists, options)
+    roots += [name for name in discovery.pth_imports(site_dirs) if name in merged]
     reach = graph.reachable(roots, options)
 
     traced: set[str] = set()

@@ -14,6 +14,7 @@ from venvprune.model import (
     ImportEdge,
     ModuleInfo,
 )
+from venvprune.symbols import build_table
 
 _IMPORTLIB_FUNCS = {"import_module", "__import__", "find_spec", "reload", "invalidate_caches"}
 _PKGUTIL_FUNCS = {"iter_modules", "walk_packages", "get_loader", "resolve_name", "extend_path"}
@@ -312,6 +313,8 @@ def scan_module(info: ModuleInfo) -> ModuleInfo:
     info.hints = visitor.hints
     info.used_attrs = visitor.used
     info.exported = visitor.exported
+    dynamic = any(h.kind is not DynamicKind.ENTRY_POINTS for h in visitor.hints)
+    info.table = build_table(tree, hints_are_dynamic=dynamic)
     return info
 
 

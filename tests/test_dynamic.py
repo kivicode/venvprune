@@ -148,3 +148,14 @@ def test_entry_points_call_in_code_discovers_the_group(tmp_path: Path):
         "for ep in entry_points(group='myapp.plugins'):\n    ep.load()\n",
     )
     assert "pluginpkg.impl" not in _unused(tmp_path)
+
+
+def test_pth_import_is_a_root(tmp_path: Path):
+    site = tmp_path / "venv" / "lib" / "python3.12" / "site-packages"
+    write(site / "_startup" / "__init__.py", "")
+    write(site / "_startup.pth", "import _startup\n")
+    write(site / "unrelated" / "__init__.py", "")
+    write(tmp_path / "code" / "app.py", "x = 1\n")
+    unused = _unused(tmp_path)
+    assert "_startup" not in unused, ".pth files run before anything else"
+    assert "unrelated" in unused

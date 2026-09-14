@@ -13,12 +13,18 @@ propagates a demand set through the graph, so `import pkg` plus one `pkg.thing` 
 the whole package. `--format rewrites` emits (and `--apply-rewrites` writes) the `__init__.py`
 patch that makes the freed modules deletable, guarded by a PEP 562 `__getattr__`.
 
+`--prune-defs` goes inside the file: a per-module symbol table decides which top-level
+definitions are still live given the module's demand set, frees the imports only dead code
+used, and narrows partially-used `from x import a, b` statements and `__all__`. Definitions are
+kept when a decorator, a foreign base class, or any runtime name lookup could reach them;
+`--risky-defs` takes those too.
+
 Remaining:
 
 - [ ] Annotation-only imports that are *not* under `TYPE_CHECKING` still execute. Detect when a
       name is used only in annotation position and the module can take
       `from __future__ import annotations`, then move the import into a `TYPE_CHECKING` block.
-- [ ] Narrow a partially-used `from .x import A, B` statement instead of keeping it whole.
+- [ ] Prune unused methods within a class, not just top-level definitions.
 - [ ] Re-run the project's own tests after applying a rewrite, as an automatic verification gate.
 
 ## Phase 3 — dynamic-import safety gating ✅
@@ -56,5 +62,7 @@ Remaining:
       and cache parse results keyed by (path, mtime, size).
 - [ ] `--explain <module>` to print the shortest import chain that keeps a module alive
       (`Reachability.why` already holds the data).
-- [ ] Apply mode: delete pruned files, with a manifest for rollback.
+- [x] Apply mode: `--apply` deletes pruned files and whole unused distributions, with a
+      manifest written before anything goes.
+- [ ] Restore from that manifest (it records what was removed, not the bytes).
 - [ ] Windows: `linked_libraries` has no implementation there (returns empty).

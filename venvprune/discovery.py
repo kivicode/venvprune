@@ -194,6 +194,25 @@ def _record_paths(info_dir: Path) -> Iterator[str]:
             yield rel
 
 
+def pth_imports(site_dirs: list[Path]) -> set[str]:
+    """Modules imported by `.pth` files, which the interpreter runs before anything else."""
+    out: set[str] = set()
+    for site in site_dirs:
+        for pth in sorted(site.glob("*.pth")):
+            for raw in pth.read_text(encoding="utf-8", errors="replace").splitlines():
+                line = raw.strip()
+                if not line.startswith(("import ", "import\t")):
+                    continue
+                for statement in line[len("import ") :].split(";"):
+                    statement = statement.strip()
+                    if statement.startswith("import "):
+                        statement = statement[len("import ") :].strip()
+                    name = statement.split(" ")[0].split(",")[0].strip()
+                    if name and all(p.isidentifier() for p in name.split(".")):
+                        out.add(name)
+    return out
+
+
 def is_zipapp(path: Path) -> bool:
     return path.is_file() and zipfile.is_zipfile(path)
 

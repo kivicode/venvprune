@@ -6,6 +6,7 @@ import argparse
 import sys
 from pathlib import Path
 
+from venvprune import apply as apply_mod
 from venvprune import native, report, rewrite, risk, tree
 from venvprune.analyzer import analyze
 from venvprune.graph import Options
@@ -22,7 +23,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--venv", required=True, type=Path, help="virtualenv (or site-packages) to prune")
     parser.add_argument(
         "--format",
-        choices=("text", "json", "paths", "tree", "rewrites", "risk", "native"),
+        choices=("text", "json", "paths", "tree", "rewrites", "defs", "risk", "native"),
         default="text",
         help="output format (default: text)",
     )
@@ -52,6 +53,16 @@ def build_parser() -> argparse.ArgumentParser:
         help="symbol precision: follow an __init__ re-export only if the name it binds is used",
     )
 
+    follow.add_argument(
+        "--prune-defs",
+        action="store_true",
+        help="also prune unreachable functions/classes inside modules that survive (implies --symbols)",
+    )
+    follow.add_argument(
+        "--risky-defs",
+        action="store_true",
+        help="with --prune-defs, also cut definitions a decorator or foreign base might register",
+    )
     follow.add_argument(
         "--scan-binaries",
         action="store_true",
@@ -104,7 +115,25 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="allow rewrites in packages that import dynamically (unsafe)",
     )
+    fix.add_argument(
+        "--apply-defs",
+        action="store_true",
+        help="write the dead-definition removals to disk (keeps a .venvprune-bak beside each file)",
+    )
     fix.add_argument("--no-shim", action="store_true", help="omit the __getattr__ guard from rewrites")
+
+    delete = parser.add_argument_group("deletion")
+    delete.add_argument(
+        "--apply",
+        action="store_true",
+        help="delete everything found: unused modules, whole unused distributions, orphaned libraries",
+    )
+    delete.add_argument("--dry-run", action="store_true", help="print the removal plan without deleting")
+    delete.add_argument(
+        "--keep-distributions",
+        action="store_true",
+        help="with --apply, remove only individual files, never a whole dist-info",
+    )
 
     tracing = parser.add_argument_group("runtime tracing")
     tracing.add_argument(
@@ -132,7 +161,9 @@ def main(argv: list[str] | None = None) -> int:
         follow_reexport=not args.no_reexport,
         dynamic_expands_package=not args.no_dynamic_expand,
         extra_roots=list(args.extra_roots),
-        symbol_precision=args.symbols,
+        symbol_precision=args.symbols or args.prune_defs,
+        prune_definitions=args.prune_defs,
+        include_risky_definitions=args.risky_defs,
         strict_dynamic=args.strict_dynamic,
         scan_binaries=args.scan_binaries,
         entry_point_groups=tuple(args.entry_point_groups),
@@ -158,11 +189,34 @@ def main(argv: list[str] | None = None) -> int:
         print(f"venvprune: {exc}", file=sys.stderr)
         return 2
 
+    if args.apply_defs:
+        plans = rewrite.plan_definition_rewrites(analysis, include_risky=args.risky_defs)
+        for plan in plans:
+            plan.apply()
+        print(f"venvprune: rewrote {len(plans)} module(s)", file=sys.stderr)
+
     if args.apply_rewrites:
         plans = rewrite.plan_rewrites(analysis, shim=not args.no_shim, allow_dynamic=args.rewrite_dynamic)
         for plan in plans:
             plan.apply()
         print(f"venvprune: rewrote {len(plans)} __init__.py file(s)", file=sys.stderr)
+
+    if args.apply or args.dry_run:
+        plan = apply_mod.build_plan(analysis, whole_distributions=not args.keep_distributions)
+        print(apply_mod.render_plan(plan))
+        if args.apply:
+            manifest = apply_mod.execute(plan, analysis.site_dirs)
+            print(f"venvprune: removed; manifest written to {manifest}", file=sys.stderr)
+        return 0
+
+    if args.format == "defs":
+        print(
+            rewrite.render_definition_plan(
+                rewrite.plan_definition_rewrites(analysis, include_risky=args.risky_defs),
+                show_diff=args.diff,
+            )
+        )
+        return 0
 
     if args.format == "native":
         extensions = analysis.extension_modules()

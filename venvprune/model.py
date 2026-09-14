@@ -117,6 +117,9 @@ class ModuleInfo:
     exported: tuple[str, ...] | None = None
     """`__all__`, when declared as a literal list of strings."""
 
+    table: object = None
+    """A `symbols.SymbolTable`; typed loosely to keep the model free of analysis imports."""
+
     @property
     def parent(self) -> str | None:
         return self.name.rpartition(".")[0] or None

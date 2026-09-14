@@ -45,6 +45,29 @@ venvprune if a removed symbol is touched after all. `--apply-rewrites` writes th
 `.venvprune-bak` beside each file). `__future__` imports, self-imports, and any package that
 imports dynamically are never rewritten.
 
+## Definition pruning (`--prune-defs`)
+
+A module that survives because one function in it is needed still ships every other function,
+class and constant it defines. `--prune-defs` builds a symbol table per module, computes which
+top-level definitions are still live given what the outside world asks of that module, and
+reports the rest as removable — which in turn frees the imports only they used, which in turn
+frees whole modules behind those imports.
+
+```bash
+uv run venvprune ./myapp --venv ./.venv --prune-defs --format defs --diff
+uv run venvprune ./myapp --venv ./.venv --prune-defs --apply-defs
+```
+
+Rewrites narrow rather than blindly delete: `from .core import a, b` becomes
+`from .core import a`, and `__all__` loses the names that went with it.
+
+A module is left entirely alone when it defines `__getattr__`, calls `eval`/`exec`/`globals`,
+uses a star import, or imports dynamically. Within a prunable module, a definition is kept when
+it is decorated with anything not known to be a no-op (it may be registering itself), when a
+class derives from a foreign base (`__init_subclass__` and metaclasses register subclasses),
+or when it is a dunder. `--risky-defs` cuts those too. `__future__` imports are never touched —
+removing one changes how the rest of the file compiles.
+
 ## Dynamic imports
 
 `importlib.import_module`, `__import__`, `pkgutil.walk_packages`, `from x import *`,
@@ -98,10 +121,17 @@ The traced process is launched with the venv's own interpreter under a `sitecust
 dumps `sys.modules` at exit. Traced modules are only ever *added* to the keep set — a trace
 covers one execution path, so it is a lower bound, never a ceiling.
 
+## Deleting it (`--apply`)
+
+`--dry-run` prints the removal plan; `--apply` carries it out and writes a manifest first.
+A distribution nothing reaches goes whole — its package directories, its `dist-info`, its data
+files and its bundled shared libraries — not just the `.py` files the module graph knows about.
+Modules named by a `.pth` file are always kept, since the interpreter runs those at startup.
+
 ## Output formats
 
-`text` (default), `tree`, `json`, `paths`, `rewrites`, `risk`, `native`. `-v` expands every
-section into individual modules and sites.
+`text` (default), `tree`, `json`, `paths`, `rewrites`, `defs`, `risk`, `native`. `-v` expands
+every section into individual modules and sites.
 
 ## Development
 

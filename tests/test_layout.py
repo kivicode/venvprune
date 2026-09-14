@@ -85,7 +85,7 @@ def test_the_public_api_is_importable():
     assert set(venvprune.__all__) == {"Analysis", "ModuleGraph", "Options", "analyze"}
     for name in venvprune.__all__:
         assert hasattr(venvprune, name)
-    assert venvprune.__version__
+    assert venvprune.__version__.count(".") == 2
 
 
 def test_the_shared_layer_stays_dependency_free():

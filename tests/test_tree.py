@@ -56,3 +56,17 @@ def test_depth_limit(analysis):
 def test_color_escapes(analysis):
     assert "\033[31m" in render_tree(analysis, color=True)
     assert "\033[" not in render_tree(analysis, color=False)
+
+
+def test_full_expansion_hides_nothing(analysis):
+    out = render_tree(analysis, max_depth=1_000, color=False, collapse=False)
+    assert "… " not in out, "no depth elision"
+    assert "all prunable)" not in out, "no collapsed subtree"
+    for name in ("core", "extra", "a", "b"):
+        assert f" {name}" in out, f"{name} should be listed individually"
+
+
+def test_collapse_and_depth_are_independent(analysis):
+    deep = render_tree(analysis, max_depth=1_000, color=False, collapse=True)
+    assert "all prunable)" in deep, "depth alone does not stop the collapse"
+    assert "… " not in deep

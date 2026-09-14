@@ -13,7 +13,7 @@ from pathlib import Path
 from venvprune import config as config_mod
 from venvprune import progress
 from venvprune.analysis import risk
-from venvprune.analysis.analyzer import analyze
+from venvprune.analysis.analyzer import Analysis, analyze
 from venvprune.analysis.graph import Options
 from venvprune.edit import apply as apply_mod
 from venvprune.edit import rewrite
@@ -88,6 +88,11 @@ def build_parser() -> argparse.ArgumentParser:
     viz = parser.add_argument_group("tree view")
     viz.add_argument("--tree-depth", type=int, default=None, help="tree nesting depth (default: 3)")
     viz.add_argument("--tree-prunable", action="store_true", help="show only branches containing prunable modules")
+    viz.add_argument(
+        "--tree-full",
+        action="store_true",
+        help="expand every module: no depth limit and no collapsing of prunable subtrees",
+    )
     viz.add_argument("--color", choices=("auto", "always", "never"), default="auto", help="colourise the tree")
 
     dev = parser.add_argument_group("dev dependencies")
@@ -167,6 +172,49 @@ def _resolve(args: argparse.Namespace) -> tuple[list[Path], Path | None, Options
     return code, venv, options, cfg, str(pick(args.format, cfg, "format", "text"))
 
 
+def _render(
+    output: str, analysis: Analysis, args: argparse.Namespace, cfg: config_mod.FileConfig, options: Options
+) -> None:
+    if output == "defs":
+        print(
+            rewrite.render_definition_plan(
+                rewrite.plan_definition_rewrites(analysis, include_risky=options.include_risky_definitions),
+                show_diff=args.diff,
+            )
+        )
+    elif output == "risk":
+        print(risk.render(risk.assess(analysis), verbose=args.verbose))
+    elif output == "rewrites":
+        print(
+            rewrite.render_plan(
+                rewrite.plan_rewrites(analysis, shim=not args.no_shim, allow_dynamic=args.rewrite_dynamic),
+                show_diff=args.diff,
+            )
+        )
+    elif output == "native":
+        extensions = analysis.extension_modules()
+        unused_names = {i.name for i in analysis.unused()}
+        kept_paths = [i.path for n, i in extensions.items() if n not in unused_names]
+        libs = native.attribute_libraries(kept_paths, native.bundled_libraries(analysis.site_dirs))
+        print(native.render_report(native.find_variants(analysis.site_dirs), libs, extensions, unused_names))
+    elif output == "tree":
+        print(
+            tree.render_tree(
+                analysis,
+                max_depth=1_000 if args.tree_full else config_mod.pick(args.tree_depth, cfg, "tree-depth", 3),
+                only_prunable=args.tree_prunable,
+                color={"auto": None, "always": True, "never": False}[args.color],
+                collapse=not args.tree_full,
+            )
+        )
+    elif output == "json":
+        print(report.render_json(analysis))
+    elif output == "paths":
+        print(report.render_paths(analysis))
+    else:
+        print(report.render_text(analysis, verbose=args.verbose))
+
+
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
@@ -237,6 +285,10 @@ def main(argv: list[str] | None = None) -> int:
         plan.measure()  # sizes must be read before the files are deleted
         manifest = apply_mod.execute(plan, analysis.site_dirs, reporter=reporter) if args.apply else None
         reporter_ctx.__exit__(None, None, None)
+        if output != "text":
+            # An explicit format is a request to see the analysis, not only the file count.
+            _render(output, analysis, args, cfg, options)
+            print()
         print(apply_mod.render_plan(plan))
 
         if manifest is not None:
@@ -245,43 +297,7 @@ def main(argv: list[str] | None = None) -> int:
 
     reporter_ctx.__exit__(None, None, None)
 
-    if output == "defs":
-        print(
-            rewrite.render_definition_plan(
-                rewrite.plan_definition_rewrites(analysis, include_risky=options.include_risky_definitions),
-                show_diff=args.diff,
-            )
-        )
-    elif output == "risk":
-        print(risk.render(risk.assess(analysis), verbose=args.verbose))
-    elif output == "rewrites":
-        print(
-            rewrite.render_plan(
-                rewrite.plan_rewrites(analysis, shim=not args.no_shim, allow_dynamic=args.rewrite_dynamic),
-                show_diff=args.diff,
-            )
-        )
-    elif output == "native":
-        extensions = analysis.extension_modules()
-        unused_names = {i.name for i in analysis.unused()}
-        kept_paths = [i.path for n, i in extensions.items() if n not in unused_names]
-        libs = native.attribute_libraries(kept_paths, native.bundled_libraries(analysis.site_dirs))
-        print(native.render_report(native.find_variants(analysis.site_dirs), libs, extensions, unused_names))
-    elif output == "tree":
-        print(
-            tree.render_tree(
-                analysis,
-                max_depth=config_mod.pick(args.tree_depth, cfg, "tree-depth", 3),
-                only_prunable=args.tree_prunable,
-                color={"auto": None, "always": True, "never": False}[args.color],
-            )
-        )
-    elif output == "json":
-        print(report.render_json(analysis))
-    elif output == "paths":
-        print(report.render_paths(analysis))
-    else:
-        print(report.render_text(analysis, verbose=args.verbose))
+    _render(output, analysis, args, cfg, options)
     return 0
 
 

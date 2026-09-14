@@ -86,6 +86,7 @@ def render_tree(
     max_depth: int = 3,
     only_prunable: bool = False,
     color: bool | None = None,
+    collapse: bool = True,
 ) -> str:
     if color is None:
         color = sys.stdout.isatty() and os.environ.get("NO_COLOR") is None
@@ -95,7 +96,7 @@ def render_tree(
     if only_prunable:
         children = [c for c in children if c.counts[0]]
     for index, child in enumerate(children):
-        _render_node(child, "", index == len(children) - 1, 1, max_depth, only_prunable, color, lines)
+        _render_node(child, "", index == len(children) - 1, 1, max_depth, only_prunable, color, collapse, lines)
     pruned, total = root.counts
     lines.append("")
     lines.append(f"{pruned}/{total} modules prunable ({_human(analysis.unused_bytes())} reclaimable)")
@@ -110,6 +111,7 @@ def _render_node(
     max_depth: int,
     only_prunable: bool,
     color: bool,
+    collapse: bool,
     out: list[str],
 ) -> None:
     mark, hue = _PRUNE_MARK if node.status is None else _MARK[node.status]
@@ -124,7 +126,7 @@ def _render_node(
     out.append(f"{prefix}{connector}{label}{detail}")
 
     child_prefix = prefix + ("    " if last else "│   ")
-    if node.fully_prunable and node.children:
+    if collapse and node.fully_prunable and node.children:
         out.append(f"{child_prefix}└── {_paint(f'({total} modules, all prunable)', '31', color)}")
         return
     if depth >= max_depth:
@@ -136,4 +138,14 @@ def _render_node(
     if only_prunable:
         children = [c for c in children if c.counts[0]]
     for index, child in enumerate(children):
-        _render_node(child, child_prefix, index == len(children) - 1, depth + 1, max_depth, only_prunable, color, out)
+        _render_node(
+            child,
+            child_prefix,
+            index == len(children) - 1,
+            depth + 1,
+            max_depth,
+            only_prunable,
+            color,
+            collapse,
+            out,
+        )

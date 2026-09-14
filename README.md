@@ -142,7 +142,16 @@ covers one execution path, so it is a lower bound, never a ceiling.
 
 ## Deleting it (`--apply`)
 
-`--dry-run` prints the removal plan; `--apply` carries it out and writes a manifest first.
+`--dry-run` prints the removal plan, and honours `--format`, so a dry run can show the analysis
+and the plan together:
+
+```bash
+uv run venvprune ./myapp --venv ./.venv --dry-run --format tree --tree-prunable
+```
+
+`--tree-full` expands every module: no depth limit, no collapsing of wholly-prunable subtrees.
+
+`--apply` carries the plan out and writes a manifest first. `--apply` carries it out and writes a manifest first.
 A distribution nothing reaches goes whole — its package directories, its `dist-info`, its data
 files and its bundled shared libraries — not just the `.py` files the module graph knows about.
 Modules named by a `.pth` file are always kept, since the interpreter runs those at startup.

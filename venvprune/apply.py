@@ -58,7 +58,7 @@ def build_plan(
     seen: set[Path] = set()
     dead_dists = set(analysis.fully_unused_distributions()) if whole_distributions else set()
     if not prune_script_packages:
-        scripts = analysis.script_distributions()
+        scripts = analysis.plugin_distributions()
         held = {d for d in dead_dists if projectmeta.canonical(d) in scripts}
         plan.kept_for_scripts = sorted(held)
         dead_dists -= held
@@ -209,7 +209,8 @@ def render_plan(plan: Plan) -> str:
         lines.append(f"  {', '.join(plan.distributions)}")
     if plan.kept_for_scripts:
         lines.append("")
-        lines.append(f"Unreachable but kept, they install a command ({len(plan.kept_for_scripts)}):")
+        lines.append(f"Unreachable but kept, they advertise entry points ({len(plan.kept_for_scripts)}):")
         lines.append(f"  {', '.join(plan.kept_for_scripts)}")
-        lines.append("  (--prune-script-packages removes these too)")
+        lines.append("  (a command, or a plugin group a framework scans for; --prune-script-packages")
+        lines.append("   removes them anyway)")
     return "\n".join(lines)

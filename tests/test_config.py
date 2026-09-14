@@ -190,3 +190,45 @@ def test_package_main_module_survives(tmp_path: Path):
 
     off = analyze([tmp_path / "code"], tmp_path / "venv", Options(keep_main_modules=False))
     assert "runner.__main__" in {i.name for i in off.unused()}
+
+
+def test_plugin_distributions_are_kept(tmp_path: Path):
+    """A pytest plugin is found through entry-point metadata, never through an import."""
+    from venvprune.apply import build_plan
+
+    site = tmp_path / "venv" / "lib" / "python3.12" / "site-packages"
+    for pkg, group in (("plug", "pytest11"), ("plain", None)):
+        write(site / pkg / "__init__.py", "")
+        info = site / f"{pkg}-1.0.dist-info"
+        write(info / "METADATA", f"Name: {pkg}\nVersion: 1.0\n\nx")
+        write(info / "RECORD", f"{pkg}/__init__.py,,\n")
+        if group:
+            write(info / "entry_points.txt", f"[{group}]\n{pkg} = {pkg}.hooks\n")
+    write(tmp_path / "code" / "app.py", "x = 1\n")
+
+    analysis = analyze([tmp_path / "code"], tmp_path / "venv")
+    assert analysis.plugin_distributions() == {"plug"}
+
+    plan = build_plan(analysis)
+    assert plan.kept_for_scripts == ["plug"]
+    assert "plug" not in plan.distributions
+    touched = [str(x) for x in (*plan.files, *plan.dirs)]
+    assert not any("/plug" in t for t in touched), "the plugin's files survive with it"
+    assert any("/plain" in t for t in touched), "a distribution with no entry points still goes"
+
+
+def test_prune_script_packages_overrides_the_protection(tmp_path: Path):
+    from venvprune.apply import build_plan
+
+    site = tmp_path / "venv" / "lib" / "python3.12" / "site-packages"
+    write(site / "plug" / "__init__.py", "")
+    info = site / "plug-1.0.dist-info"
+    write(info / "METADATA", "Name: plug\nVersion: 1.0\n\nx")
+    write(info / "RECORD", "plug/__init__.py,,\n")
+    write(info / "entry_points.txt", "[pytest11]\nplug = plug.hooks\n")
+    write(tmp_path / "code" / "app.py", "x = 1\n")
+
+    analysis = analyze([tmp_path / "code"], tmp_path / "venv")
+    plan = build_plan(analysis, prune_script_packages=True)
+    assert plan.kept_for_scripts == []
+    assert "plug" in plan.distributions

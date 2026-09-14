@@ -83,17 +83,15 @@ class Analysis:
     def unused_bytes(self) -> int:
         return sum(p.stat().st_size for i in self.unused() for p in (i.path, *i.shadowed) if p.is_file())
 
-    def script_distributions(self) -> set[str]:
-        """Distributions advertising console/GUI scripts, i.e. meant to be run as programs.
+    def plugin_distributions(self) -> set[str]:
+        """Distributions advertising any entry point, i.e. discoverable without an import.
 
-        The launcher in `bin/` imports the package (or is a binary shipped beside it), so
-        removing its modules can break a command the project shells out to — something no
-        import graph can see.
+        A console script's launcher imports the package; a `pytest11`, `flake8.extension` or
+        application-defined group is loaded by a framework scanning metadata. Either way the
+        import graph cannot see it, so removing the modules silently breaks whatever looks the
+        distribution up -- pytest-asyncio simply stops collecting async tests.
         """
-        groups = {"console_scripts", "gui_scripts"}
-        return {
-            projectmeta.canonical(name) for name, dist in self.distributions.items() if groups & set(dist.entry_points)
-        }
+        return {projectmeta.canonical(name) for name, dist in self.distributions.items() if dist.entry_points}
 
     def fully_unused_distributions(self) -> list[str]:
         unused = {i.name for i in self.unused()}

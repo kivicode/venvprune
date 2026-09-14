@@ -15,7 +15,7 @@ from venvprune.model import (
     ModuleInfo,
 )
 from venvprune.progress import Tracker
-from venvprune.symbols import build_table
+from venvprune.scan.symbols import build_table
 
 _IMPORTLIB_FUNCS = {"import_module", "__import__", "find_spec", "reload", "invalidate_caches"}
 _PKGUTIL_FUNCS = {"iter_modules", "walk_packages", "get_loader", "resolve_name", "extend_path"}

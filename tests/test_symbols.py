@@ -6,10 +6,10 @@ from pathlib import Path
 
 import pytest
 
-from venvprune.analyzer import analyze
-from venvprune.graph import Options
+from venvprune.analysis.analyzer import analyze
+from venvprune.analysis.graph import Options
+from venvprune.edit.rewrite import plan_rewrites
 from venvprune.model import Demand
-from venvprune.rewrite import plan_rewrites
 
 from .conftest import write
 

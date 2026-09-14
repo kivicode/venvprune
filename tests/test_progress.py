@@ -47,7 +47,7 @@ def test_rich_reporter_tracks_counts(monkeypatch: pytest.MonkeyPatch):
 
 
 def test_analysis_accepts_a_reporter(tmp_path):
-    from venvprune.analyzer import analyze
+    from venvprune.analysis.analyzer import analyze
 
     from .conftest import write
 

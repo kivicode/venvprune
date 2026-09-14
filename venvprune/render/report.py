@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from collections.abc import Iterable
 
-from venvprune.analyzer import Analysis
+from venvprune.analysis.analyzer import Analysis
 from venvprune.model import EdgeKind, ModuleInfo
 
 

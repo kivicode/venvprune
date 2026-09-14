@@ -2,9 +2,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from venvprune.analyzer import analyze
-from venvprune.graph import Options
-from venvprune.projectmeta import canonical, read_project
+from venvprune.analysis.analyzer import analyze
+from venvprune.analysis.graph import Options
+from venvprune.scan.projectmeta import canonical, read_project
 
 from .conftest import write
 

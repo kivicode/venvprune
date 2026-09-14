@@ -3,9 +3,9 @@ from __future__ import annotations
 from pathlib import Path
 
 from venvprune import config as config_mod
-from venvprune.analyzer import analyze
+from venvprune.analysis.analyzer import analyze
+from venvprune.analysis.graph import Options
 from venvprune.cli import _resolve, build_parser, main
-from venvprune.graph import Options
 
 from .conftest import write
 
@@ -144,7 +144,7 @@ def test_invalid_toml_is_an_error(tmp_path: Path, capsys):
 
 
 def test_stale_bytecode_goes_with_the_module(tmp_path: Path):
-    from venvprune.apply import build_plan
+    from venvprune.edit.apply import build_plan
 
     site = tmp_path / "venv" / "lib" / "python3.12" / "site-packages"
     write(site / "pkg" / "__init__.py", "")
@@ -160,7 +160,7 @@ def test_stale_bytecode_goes_with_the_module(tmp_path: Path):
 
 
 def test_strip_pycache_removes_every_cache(tmp_path: Path):
-    from venvprune.apply import build_plan
+    from venvprune.edit.apply import build_plan
 
     site = tmp_path / "venv" / "lib" / "python3.12" / "site-packages"
     write(site / "pkg" / "__init__.py", "")
@@ -194,7 +194,7 @@ def test_package_main_module_survives(tmp_path: Path):
 
 def test_plugin_distributions_are_kept(tmp_path: Path):
     """A pytest plugin is found through entry-point metadata, never through an import."""
-    from venvprune.apply import build_plan
+    from venvprune.edit.apply import build_plan
 
     site = tmp_path / "venv" / "lib" / "python3.12" / "site-packages"
     for pkg, group in (("plug", "pytest11"), ("plain", None)):
@@ -218,7 +218,7 @@ def test_plugin_distributions_are_kept(tmp_path: Path):
 
 
 def test_prune_script_packages_overrides_the_protection(tmp_path: Path):
-    from venvprune.apply import build_plan
+    from venvprune.edit.apply import build_plan
 
     site = tmp_path / "venv" / "lib" / "python3.12" / "site-packages"
     write(site / "plug" / "__init__.py", "")

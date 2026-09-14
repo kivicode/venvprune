@@ -6,7 +6,6 @@ from collections import deque
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from venvprune import symbols
 from venvprune.model import (
     ArgShape,
     Demand,
@@ -18,7 +17,8 @@ from venvprune.model import (
     Origin,
     Reachability,
 )
-from venvprune.symbols import SymbolTable
+from venvprune.scan import symbols
+from venvprune.scan.symbols import SymbolTable
 
 _CERTAINTY = {
     EdgeKind.EAGER: 3,

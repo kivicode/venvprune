@@ -22,10 +22,10 @@ from pathlib import Path
 
 import pytest
 
-from venvprune.analyzer import analyze
-from venvprune.apply import build_plan, execute
-from venvprune.graph import Options
-from venvprune.rewrite import plan_definition_rewrites
+from venvprune.analysis.analyzer import analyze
+from venvprune.analysis.graph import Options
+from venvprune.edit.apply import build_plan, execute
+from venvprune.edit.rewrite import plan_definition_rewrites
 
 from .conftest import write
 

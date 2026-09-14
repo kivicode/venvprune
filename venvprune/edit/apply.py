@@ -11,9 +11,10 @@ import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from venvprune import native, progress, projectmeta
-from venvprune.analyzer import Analysis
+from venvprune import progress
+from venvprune.analysis.analyzer import Analysis
 from venvprune.progress import Tracker
+from venvprune.scan import native, projectmeta
 
 MANIFEST_NAME = "venvprune-manifest.json"
 

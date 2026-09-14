@@ -5,10 +5,10 @@ from pathlib import Path
 
 import pytest
 
-from venvprune.analyzer import analyze
-from venvprune.graph import Options
+from venvprune.analysis.analyzer import analyze
+from venvprune.analysis.graph import Options
 from venvprune.model import EdgeKind
-from venvprune.trace import run_trace
+from venvprune.scan.trace import run_trace
 
 
 def write(path: Path, text: str) -> None:

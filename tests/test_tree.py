@@ -4,8 +4,8 @@ from pathlib import Path
 
 import pytest
 
-from venvprune.analyzer import analyze
-from venvprune.tree import build_tree, render_tree
+from venvprune.analysis.analyzer import analyze
+from venvprune.render.tree import build_tree, render_tree
 
 from .conftest import write
 

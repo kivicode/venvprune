@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
+import fnmatch
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from venvprune import astscan, discovery, native, progress, projectmeta
-from venvprune import config as config_mod
-from venvprune.graph import ModuleGraph, Options
+from venvprune import progress
+from venvprune.analysis.graph import ModuleGraph, Options
 from venvprune.model import (
     Distribution,
     DynamicHint,
@@ -19,7 +19,9 @@ from venvprune.model import (
     Origin,
     Reachability,
 )
-from venvprune.trace import TraceResult, site_relative_names
+from venvprune.scan import astscan, discovery, native, projectmeta
+from venvprune.scan.projectmeta import canonical
+from venvprune.scan.trace import TraceResult, site_relative_names
 
 
 @dataclass
@@ -140,7 +142,7 @@ def analyze(
     graph = ModuleGraph(merged, discovery.stdlib_module_names(), options)
 
     dist_of = _map_modules_to_dists(merged, dists)
-    kept_by_config, unmatched_keep = config_mod.expand_keep(list(options.keep), merged, dist_of)
+    kept_by_config, unmatched_keep = expand_keep(list(options.keep), merged, dist_of)
 
     walk_task = reporter.task("Resolving imports", total=None)
     roots = graph.local_roots() + [r for r in options.extra_roots if r in merged]
@@ -195,6 +197,30 @@ def _add_binary_edges(modules: dict[str, ModuleInfo], reporter: progress.Reporte
         siblings = by_package.get(package, set()) - {leaf}
         found = native.imports_from_binary(info.path, names, package, siblings) - {name}
         info.edges = [ImportEdge(name, target, EdgeKind.LAZY, 0, 0) for target in sorted(found) if target != name]
+
+
+def expand_keep(
+    patterns: list[str], modules: Mapping[str, ModuleInfo], dist_of: Mapping[str, str]
+) -> tuple[set[str], set[str]]:
+    """Resolve keep patterns against module and distribution names.
+
+    A pattern may name a module (`numpy.linalg`), a whole subtree (`numpy.*`), or a
+    distribution (`tqt-plugin-license`). Returns (matched modules, patterns that matched
+    nothing) so a stale keep entry can be reported rather than silently ignored.
+    """
+    kept: set[str] = set()
+    unmatched: set[str] = set()
+    canonical_patterns = {canonical(p): p for p in patterns}
+    for pattern in patterns:
+        hits = {name for name in modules if name == pattern or fnmatch.fnmatchcase(name, pattern)}
+        if not hits:
+            wanted = canonical(pattern)
+            hits = {name for name, dist in dist_of.items() if canonical(dist) == wanted}
+        if hits:
+            kept |= hits
+        else:
+            unmatched.add(canonical_patterns.get(canonical(pattern), pattern))
+    return kept, unmatched
 
 
 def _keep_main_modules(graph: ModuleGraph, reach: Reachability, options: Options) -> None:

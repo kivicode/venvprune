@@ -17,9 +17,9 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from venvprune.analyzer import Analysis
+from venvprune.analysis.analyzer import Analysis
 from venvprune.model import Demand, ImportEdge
-from venvprune.symbols import Definition, SymbolTable, dead_definitions, live_symbols
+from venvprune.scan.symbols import Definition, SymbolTable, dead_definitions, live_symbols
 
 _SHIM_HEADER = "# --- venvprune: lazily-removed re-exports ---"
 

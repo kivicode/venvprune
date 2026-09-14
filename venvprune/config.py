@@ -7,13 +7,12 @@ as a subprocess, a plugin loaded from a config file) gets written down.
 
 from __future__ import annotations
 
-import fnmatch
 import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from venvprune.projectmeta import canonical, find_pyproject
+from venvprune.scan.projectmeta import find_pyproject
 
 SECTION = "venvprune"
 
@@ -100,27 +99,3 @@ def merge_list(cli_value: list[str] | None, config: FileConfig, key: str) -> lis
     if not isinstance(from_config, list):
         from_config = [from_config]
     return [*(str(v) for v in from_config), *(cli_value or [])]
-
-
-def expand_keep(
-    patterns: list[str], modules: dict[str, Any], dist_of: dict[str, str] | Any
-) -> tuple[set[str], set[str]]:
-    """Resolve keep patterns against module and distribution names.
-
-    A pattern may name a module (`numpy.linalg`), a whole subtree (`numpy.*`), or a
-    distribution (`tqt-plugin-license`). Returns (matched modules, patterns that matched
-    nothing) so a stale keep entry can be reported rather than silently ignored.
-    """
-    kept: set[str] = set()
-    unmatched: set[str] = set()
-    canonical_patterns = {canonical(p): p for p in patterns}
-    for pattern in patterns:
-        hits = {name for name in modules if name == pattern or fnmatch.fnmatchcase(name, pattern)}
-        if not hits:
-            wanted = canonical(pattern)
-            hits = {name for name, dist in dist_of.items() if canonical(dist) == wanted}
-        if hits:
-            kept |= hits
-        else:
-            unmatched.add(canonical_patterns.get(canonical(pattern), pattern))
-    return kept, unmatched

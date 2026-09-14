@@ -3,6 +3,8 @@ name = "venvprune"
 version = "0.1.0"
 description = "Static analysis to find venv modules that the given code never needs"
 readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
 authors = [
     { name = "KiviCode", email = "kivicode@yandex.com" }
 ]

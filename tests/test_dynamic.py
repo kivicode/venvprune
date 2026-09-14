@@ -4,10 +4,10 @@ from pathlib import Path
 
 import pytest
 
-from venvprune.analyzer import analyze
-from venvprune.graph import Options
+from venvprune.analysis.analyzer import analyze
+from venvprune.analysis.graph import Options
+from venvprune.analysis.risk import Severity, assess, package_risk
 from venvprune.model import ArgShape
-from venvprune.risk import Severity, assess, package_risk
 
 from .conftest import write
 

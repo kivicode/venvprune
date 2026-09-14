@@ -4,10 +4,10 @@ from __future__ import annotations
 
 import pytest
 
-from venvprune.analyzer import analyze
-from venvprune.graph import Options
+from venvprune.analysis.analyzer import analyze
+from venvprune.analysis.graph import Options
 from venvprune.model import EdgeKind
-from venvprune.trace import run_trace
+from venvprune.scan.trace import run_trace
 
 from .conftest import RealEnv, requires_uv
 
@@ -83,7 +83,7 @@ def test_trace_promotes_lazy_import_to_observed(real_env: RealEnv):
 
 def test_symbol_precision_rewrites_survive_a_real_import(real_env: RealEnv, tmp_path):
     """Apply the phase-2 rewrites, delete everything freed, and prove the app still runs."""
-    from venvprune.rewrite import plan_rewrites
+    from venvprune.edit.rewrite import plan_rewrites
 
     analysis = analyze([real_env.code], real_env.venv, Options(symbol_precision=True))
     plans = plan_rewrites(analysis)
@@ -116,7 +116,7 @@ def test_definition_pruning_survives_a_real_import(real_env: RealEnv, tmp_path):
     """Cut dead definitions out of real library code, delete what that frees, still run."""
     import ast as ast_mod
 
-    from venvprune.rewrite import plan_definition_rewrites
+    from venvprune.edit.rewrite import plan_definition_rewrites
 
     opts = Options(symbol_precision=True, prune_definitions=True)
     plans = plan_definition_rewrites(analyze([real_env.code], real_env.venv, opts))
@@ -138,7 +138,7 @@ def test_apply_removes_whole_distributions(real_env: RealEnv, tmp_path):
     """A distribution nothing reaches goes entirely: package dir and dist-info alike."""
     import shutil
 
-    from venvprune.apply import build_plan, execute
+    from venvprune.edit.apply import build_plan, execute
 
     scratch = tmp_path / "clone"
     shutil.copytree(real_env.venv, scratch, symlinks=True)

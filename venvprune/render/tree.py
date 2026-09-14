@@ -6,7 +6,7 @@ import os
 import sys
 from dataclasses import dataclass, field
 
-from venvprune.analyzer import Analysis
+from venvprune.analysis.analyzer import Analysis
 from venvprune.model import EdgeKind, ModuleInfo, Origin
 
 _MARK = {

@@ -10,13 +10,17 @@ import argparse
 import sys
 from pathlib import Path
 
-from venvprune import apply as apply_mod
 from venvprune import config as config_mod
-from venvprune import native, progress, report, rewrite, risk, tree
-from venvprune.analyzer import analyze
-from venvprune.graph import Options
-from venvprune.projectmeta import DEFAULT_DEV_GROUPS
-from venvprune.trace import run_trace, venv_python
+from venvprune import progress
+from venvprune.analysis import risk
+from venvprune.analysis.analyzer import analyze
+from venvprune.analysis.graph import Options
+from venvprune.edit import apply as apply_mod
+from venvprune.edit import rewrite
+from venvprune.render import report, tree
+from venvprune.scan import native
+from venvprune.scan.projectmeta import DEFAULT_DEV_GROUPS
+from venvprune.scan.trace import run_trace, venv_python
 
 
 def _flag(group: argparse._ArgumentGroup | argparse.ArgumentParser, name: str, help_: str) -> None:

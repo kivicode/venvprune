@@ -4,9 +4,9 @@ from pathlib import Path
 
 import pytest
 
-from venvprune import native
-from venvprune.analyzer import analyze
-from venvprune.graph import Options
+from venvprune.analysis.analyzer import analyze
+from venvprune.analysis.graph import Options
+from venvprune.scan import native
 
 from .conftest import write
 
@@ -119,7 +119,7 @@ def test_plain_dylib_is_not_an_importable_module(venv: Path, tmp_path: Path):
 
 def test_all_files_backing_one_module_are_pruned(venv: Path, tmp_path: Path):
     """A `.so` beside a `.py` is the same module: pruning it must take both files."""
-    from venvprune.apply import build_plan
+    from venvprune.edit.apply import build_plan
 
     write(venv / "pkg" / "__init__.py", "")
     write(venv / "pkg" / "dead.py", "")
@@ -136,7 +136,7 @@ def test_all_files_backing_one_module_are_pruned(venv: Path, tmp_path: Path):
 
 
 def test_pruning_is_a_fixpoint_with_multi_file_modules(venv: Path, tmp_path: Path):
-    from venvprune.apply import build_plan, execute
+    from venvprune.edit.apply import build_plan, execute
 
     write(venv / "pkg" / "__init__.py", "")
     write(venv / "pkg" / "dead.py", "")

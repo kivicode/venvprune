@@ -7,11 +7,11 @@ from pathlib import Path
 
 import pytest
 
-from venvprune.analyzer import analyze
-from venvprune.graph import Options
+from venvprune.analysis.analyzer import analyze
+from venvprune.analysis.graph import Options
+from venvprune.edit.rewrite import plan_definition_rewrites
 from venvprune.model import Demand
-from venvprune.rewrite import plan_definition_rewrites
-from venvprune.symbols import Tier, build_table, dead_definitions, live_symbols
+from venvprune.scan.symbols import Tier, build_table, dead_definitions, live_symbols
 
 from .conftest import write
 

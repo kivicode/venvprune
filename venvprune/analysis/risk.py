@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import IntEnum
 
-from venvprune.analyzer import Analysis
+from venvprune.analysis.analyzer import Analysis
 from venvprune.model import DynamicHint, DynamicKind
 
 

@@ -15,17 +15,17 @@ uv run venvprune ./myapp --venv ./.venv --format paths | xargs rm   # at your ow
 
 ## What it models
 
-| Import form | Classified as | Followed by default |
-| --- | --- | --- |
-| module-level `import x` | `eager` | yes |
-| `import x` in a function body | `lazy` | yes (`--no-lazy` to drop) |
-| import in `__init__.py` | `reexport` | yes (`--no-reexport` to drop) |
-| import under `if TYPE_CHECKING:` | `type_only` | no (`--type-only` to keep) |
+| Import form                      | Classified as | Followed by default           |
+| -------------------------------- | ------------- | ----------------------------- |
+| module-level `import x`          | `eager`       | yes                           |
+| `import x` in a function body    | `lazy`        | yes (`--no-lazy` to drop)     |
+| import in `__init__.py`          | `reexport`    | yes (`--no-reexport` to drop) |
+| import under `if TYPE_CHECKING:` | `type_only`   | no (`--type-only` to keep)    |
 
 Relative imports, PEP 420 namespace packages, `.pyi` stubs, and native extension modules
 (`.so` / `.pyd`) are all indexed. A submodule always drags in every parent `__init__`.
 
-Reaching a module records the *weakest* link in the chain, so a package pulled in only through
+Reaching a module records the _weakest_ link in the chain, so a package pulled in only through
 a lazy import inside another lazily-imported module is reported as a `lazy` keep.
 
 ## Symbol precision (`--symbols`)
@@ -36,7 +36,7 @@ binds and which attributes the code actually reads off them, then propagates tha
 through the graph. A package `__init__`'s re-export is followed only when someone needs the name
 it binds.
 
-Demand widens to *everything* when the module is used opaquely (`dir(pkg)`, passing `pkg`
+Demand widens to _everything_ when the module is used opaquely (`dir(pkg)`, passing `pkg`
 around) or when a live `from pkg import *` is reached, so the narrowing is never a guess.
 
 `--format rewrites` then emits the patch that makes those modules actually deletable: it drops
@@ -74,13 +74,13 @@ removing one changes how the rest of the file compiles.
 entry-point loading and `getattr(<module>, <non-literal>)` are detected, and their argument is
 folded as far as it can be:
 
-| Call | Resolved to |
-| --- | --- |
-| `import_module("pkg.backend_a")` | that one module |
-| `import_module(f"pkg.backend_{name}")` | everything under the literal prefix |
-| `for n in ["a", "b"]: import_module(n)` | those two |
-| `import_module("." + n, __package__)` | the importing package's subtree |
-| `import_module(name)` | unbounded — the whole package is kept |
+| Call                                    | Resolved to                           |
+| --------------------------------------- | ------------------------------------- |
+| `import_module("pkg.backend_a")`        | that one module                       |
+| `import_module(f"pkg.backend_{name}")`  | everything under the literal prefix   |
+| `for n in ["a", "b"]: import_module(n)` | those two                             |
+| `import_module("." + n, __package__)`   | the importing package's subtree       |
+| `import_module(name)`                   | unbounded — the whole package is kept |
 
 `--strict-dynamic` keeps nothing for a site that stays unbounded. `--format risk` rates every
 site `resolved` / `confined` / `open` and names the packages that cannot be pruned safely.
@@ -137,7 +137,7 @@ uv run venvprune ./myapp --venv ./.venv --trace -m myapp.main --serve
 ```
 
 The traced process is launched with the venv's own interpreter under a `sitecustomize` hook that
-dumps `sys.modules` at exit. Traced modules are only ever *added* to the keep set — a trace
+dumps `sys.modules` at exit. Traced modules are only ever _added_ to the keep set — a trace
 covers one execution path, so it is a lower bound, never a ceiling.
 
 ## Deleting it (`--apply`)
@@ -161,6 +161,19 @@ deletes things out of virtualenvs, so it has to keep working when `rich` is not 
 `text` (default), `tree`, `json`, `paths`, `rewrites`, `defs`, `risk`, `native`. `-v` expands
 every section into individual modules and sites.
 
+## Layout
+
+The package is layered along the pipeline; a module may import its own layer or a lower one,
+never a higher one, which `tests/test_layout.py` enforces.
+
+| layer | modules | role |
+| --- | --- | --- |
+| `model`, `progress` | — | shared types and progress reporting; depend on nothing |
+| `scan/` | `discovery`, `astscan`, `symbols`, `native`, `trace`, `projectmeta` | read the world: filesystem, source, binaries, metadata, a live process |
+| `analysis/` | `graph`, `analyzer`, `risk` | resolve imports, decide reachability, rate dynamic sites |
+| `render/`, `edit/`, `config` | `report`, `tree`, `rewrite`, `apply` | present the answer, or act on it |
+| `cli` | — | wires it together |
+
 ## Development
 
 ```bash
@@ -170,5 +183,3 @@ uv run pytest -m "not integration"
 uv run ruff check . && uv run ruff format --check .
 uv run ty check
 ```
-
-See [ROADMAP.md](ROADMAP.md) for what is done and what is left.

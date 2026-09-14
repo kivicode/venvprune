@@ -165,3 +165,17 @@ def test_binary_scan_resolves_bare_sibling_names(venv: Path, tmp_path: Path):
     unused = {i.name for i in seeing.unused()}
     assert "pkg._helper" not in unused, "the bare sibling name resolves against its package"
     assert "elsewhere" not in unused, "a fully-qualified match still works"
+
+
+def test_binary_scan_finds_a_sibling_inside_a_mangled_symbol(venv: Path, tmp_path: Path):
+    """Cython leaves only `__pyx_v_4pkg_4core__helper`, never a clean `pkg._helper`."""
+    write(venv / "pkg" / "__init__.py", "import pkg.core\n")
+    write_blob(venv / "pkg" / "core.cpython-312-darwin.so", ["___pyx_v_3pkg_4core__helper"])
+    write_blob(venv / "pkg" / "_helper.cpython-312-darwin.so", ["x"])
+    write(venv / "pkg" / "spare.py", "")
+    write(tmp_path / "code" / "app.py", "import pkg\n")
+
+    seeing = analyze([tmp_path / "code"], tmp_path / "venv", Options(scan_binaries=True))
+    unused = {i.name for i in seeing.unused()}
+    assert "pkg._helper" not in unused, "the sibling hides inside the mangled symbol"
+    assert "pkg.spare" in unused, "a sibling that is never mentioned still goes"

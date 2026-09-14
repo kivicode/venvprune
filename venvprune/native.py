@@ -109,32 +109,48 @@ def _in_lib_dir(path: Path) -> bool:
     return any(part in _LIB_DIRS or part.endswith(_LIB_DIRS) for part in path.parts)
 
 
-def strings_in(path: Path, limit: int = 40_000_000) -> set[str]:
+def _read(path: Path, limit: int = 40_000_000) -> bytes:
     try:
-        blob = path.read_bytes()[:limit]
+        return path.read_bytes()[:limit]
     except OSError:
-        return set()
+        return b""
+
+
+def _strings(blob: bytes) -> set[str]:
     return {m.group().decode("ascii", "replace") for m in _STRING.finditer(blob)}
 
 
-def imports_from_binary(path: Path, known: Iterable[str], package: str = "") -> set[str]:
-    """Module names embedded in an extension that also exist in the analysed index.
+def strings_in(path: Path, limit: int = 40_000_000) -> set[str]:
+    return _strings(_read(path, limit))
 
-    C code imports by name, so the name survives in the binary's string table. Cython and
-    hand-written extensions usually store the *bare* name of a sibling (`_elementpath`, not
-    `lxml._elementpath`), so bare strings are also tried against the importing package.
-    Matching against the index keeps the false-positive rate low, at the cost of missing
-    names built at runtime.
+
+def imports_from_binary(path: Path, known: Iterable[str], package: str = "", siblings: Iterable[str] = ()) -> set[str]:
+    """Module names an extension imports from C, recovered from its bytes.
+
+    Three passes, loosening as they go. A whole printable run that is a known dotted name is
+    taken as-is; a bare run is tried against the importing package. Cython leaves neither —
+    `lxml/etree.so` references `_elementpath` only inside the mangled symbol
+    `___pyx_v_4lxml_5etree__elementpath` — so a sibling's name appearing anywhere in the
+    binary also counts. That last pass over-keeps, which is the safe direction, and is limited
+    to siblings so it cannot reach across the venv.
     """
+    blob = _read(path)
+    if not blob:
+        return set()
     known_set = set(known)
     found: set[str] = set()
-    for text in strings_in(path):
+    for text in _strings(blob):
         if not _DOTTED.match(text):
             continue
         if text in known_set:
             found.add(text)
         elif package and (sibling := f"{package}.{text}") in known_set:
             found.add(sibling)
+
+    for bare in siblings:
+        # Short names would match far too much text to mean anything.
+        if len(bare) >= 4 and bare.encode() in blob:
+            found.add(f"{package}.{bare}" if package else bare)
     return found
 
 

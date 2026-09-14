@@ -184,12 +184,18 @@ def analyze(
 def _add_binary_edges(modules: dict[str, ModuleInfo], reporter: progress.Reporter) -> None:
     """Give each extension module the imports its string table reveals, as lazy edges."""
     names = set(modules)
+    by_package: dict[str, set[str]] = {}
+    for module in modules:
+        parent, _, leaf = module.rpartition(".")
+        if parent:
+            by_package.setdefault(parent, set()).add(leaf)
     extensions = native.extension_modules(modules)
     task = reporter.task("Scanning binaries", total=len(extensions))
     for name, info in extensions.items():
         task.advance()
-        package = name.rpartition(".")[0]
-        found = native.imports_from_binary(info.path, names, package) - {name}
+        package, _, leaf = name.rpartition(".")
+        siblings = by_package.get(package, set()) - {leaf}
+        found = native.imports_from_binary(info.path, names, package, siblings) - {name}
         info.edges = [ImportEdge(name, target, EdgeKind.LAZY, 0, 0) for target in sorted(found) if target != name]
 
 

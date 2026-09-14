@@ -179,3 +179,23 @@ def test_binary_scan_finds_a_sibling_inside_a_mangled_symbol(venv: Path, tmp_pat
     unused = {i.name for i in seeing.unused()}
     assert "pkg._helper" not in unused, "the sibling hides inside the mangled symbol"
     assert "pkg.spare" in unused, "a sibling that is never mentioned still goes"
+
+
+def test_library_dependencies_are_followed_transitively(venv: Path, monkeypatch):
+    """A bundled lib needed only by another bundled lib must survive with it."""
+    write_blob(venv / "pkg" / ".dylibs" / "libxcb.1.dylib", ["x"])
+    write_blob(venv / "pkg" / ".dylibs" / "libXau.6.dylib", ["x"])
+    write_blob(venv / "pkg" / ".dylibs" / "liborphan.1.dylib", ["x"])
+    ext = venv / "pkg" / "_imaging.cpython-312-darwin.so"
+    write_blob(ext, ["x"])
+
+    links = {
+        "_imaging.cpython-312-darwin.so": ["@loader_path/.dylibs/libxcb.1.dylib"],
+        "libxcb.1.dylib": ["@loader_path/libXau.6.dylib"],
+    }
+    monkeypatch.setattr(native, "linked_libraries", lambda p: links.get(p.name, []))
+
+    libs = native.attribute_libraries([ext], native.bundled_libraries([venv]))
+    assert libs["libxcb.1.dylib"].referenced_by, "linked straight from the extension"
+    assert libs["libXau.6.dylib"].referenced_by == {"libxcb.1.dylib"}, "reached through libxcb"
+    assert not libs["liborphan.1.dylib"].referenced_by, "nothing links it"

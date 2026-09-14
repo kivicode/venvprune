@@ -204,10 +204,16 @@ def bundled_libraries(site_dirs: list[Path], tracker: Tracker | None = None) -> 
 def attribute_libraries(
     kept_extensions: Iterable[Path], libs: dict[str, BundledLib], tracker: Tracker | None = None
 ) -> dict[str, BundledLib]:
-    """Mark which bundled libraries are still reachable from an extension that survives."""
+    """Mark bundled libraries reachable from a surviving extension, transitively.
+
+    Bundled libraries link each other (`libxcb` needs `libXau`), and only the first hop is
+    visible from the extension modules, so the closure has to be walked or the second hop is
+    deleted out from under a library that is still loaded.
+    """
     if not libs:
         # Nothing to attribute, so skip the one `otool`/`objdump` call per extension.
         return libs
+    pending: list[tuple[str, str]] = []
     for ext in kept_extensions:
         if tracker is not None:
             tracker.advance()
@@ -215,6 +221,22 @@ def attribute_libraries(
             name = link.rsplit("/", 1)[-1]
             if name in libs:
                 libs[name].referenced_by.add(ext.name)
+                pending.append((name, ext.name))
+
+    seen: set[str] = set()
+    while pending:
+        name, _ = pending.pop()
+        if name in seen:
+            continue
+        seen.add(name)
+        if tracker is not None:
+            tracker.advance()
+        for link in linked_libraries(libs[name].path):
+            dep = link.rsplit("/", 1)[-1]
+            if dep in libs and dep != name:
+                libs[dep].referenced_by.add(name)
+                if dep not in seen:
+                    pending.append((dep, name))
     return libs
 
 

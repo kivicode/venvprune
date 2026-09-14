@@ -70,6 +70,7 @@ def build_parser() -> argparse.ArgumentParser:
     _flag(follow, "prune-defs", "prune unreachable definitions inside surviving modules (implies --symbols)")
     _flag(follow, "risky-defs", "with --prune-defs, also cut definitions a decorator or base class might register")
     _flag(follow, "scan-binaries", "recover imports embedded in compiled extension modules")
+    _flag(follow, "keep-main-modules", "keep pkg/__main__.py of surviving packages (default: on)")
     _flag(follow, "strict-dynamic", "keep nothing for an unbounded dynamic import")
     follow.add_argument(
         "--entry-point-group",
@@ -152,6 +153,7 @@ def _resolve(args: argparse.Namespace) -> tuple[list[Path], Path | None, Options
         include_risky_definitions=pick(args.risky_defs, cfg, "risky-defs", False),
         scan_binaries=pick(args.scan_binaries, cfg, "scan-binaries", False),
         strict_dynamic=pick(args.strict_dynamic, cfg, "strict-dynamic", False),
+        keep_main_modules=pick(args.keep_main_modules, cfg, "keep-main-modules", True),
         entry_point_groups=tuple(config_mod.merge_list(args.entry_point_groups, cfg, "entry-point-groups")),
         prune_dev_groups=(tuple(dev_groups) or DEFAULT_DEV_GROUPS)
         if pick(args.prune_dev, cfg, "prune-dev", False)

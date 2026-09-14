@@ -117,18 +117,24 @@ def strings_in(path: Path, limit: int = 40_000_000) -> set[str]:
     return {m.group().decode("ascii", "replace") for m in _STRING.finditer(blob)}
 
 
-def imports_from_binary(path: Path, known: Iterable[str]) -> set[str]:
+def imports_from_binary(path: Path, known: Iterable[str], package: str = "") -> set[str]:
     """Module names embedded in an extension that also exist in the analysed index.
 
-    C code imports by name (`PyImport_ImportModule("json")`), so the name survives in the
-    binary's string table. Matching against the index keeps the false-positive rate low,
-    at the cost of missing names built at runtime.
+    C code imports by name, so the name survives in the binary's string table. Cython and
+    hand-written extensions usually store the *bare* name of a sibling (`_elementpath`, not
+    `lxml._elementpath`), so bare strings are also tried against the importing package.
+    Matching against the index keeps the false-positive rate low, at the cost of missing
+    names built at runtime.
     """
     known_set = set(known)
     found: set[str] = set()
     for text in strings_in(path):
-        if text in known_set and _DOTTED.match(text):
+        if not _DOTTED.match(text):
+            continue
+        if text in known_set:
             found.add(text)
+        elif package and (sibling := f"{package}.{text}") in known_set:
+            found.add(sibling)
     return found
 
 

@@ -170,3 +170,23 @@ def test_strip_pycache_removes_every_cache(tmp_path: Path):
     analysis = analyze([tmp_path / "code"], tmp_path / "venv")
     assert not build_plan(analysis).dirs
     assert any(d.name == "__pycache__" for d in build_plan(analysis, strip_pycache=True).dirs)
+
+
+def test_package_main_module_survives(tmp_path: Path):
+    """`python -m pkg` runs pkg/__main__.py, which no import statement references."""
+    site = tmp_path / "venv" / "lib" / "python3.12" / "site-packages"
+    write(site / "runner" / "__init__.py", "")
+    write(site / "runner" / "__main__.py", "from runner.cli import go\n\ngo()\n")
+    write(site / "runner" / "cli.py", "def go():\n    pass\n")
+    write(site / "unused" / "__init__.py", "")
+    write(site / "unused" / "__main__.py", "")
+    write(tmp_path / "code" / "app.py", "import runner\n")
+
+    kept = analyze([tmp_path / "code"], tmp_path / "venv")
+    unused = {i.name for i in kept.unused()}
+    assert "runner.__main__" not in unused
+    assert "runner.cli" not in unused, "what __main__ imports is needed too"
+    assert "unused.__main__" in unused, "its package is unreachable anyway"
+
+    off = analyze([tmp_path / "code"], tmp_path / "venv", Options(keep_main_modules=False))
+    assert "runner.__main__" in {i.name for i in off.unused()}

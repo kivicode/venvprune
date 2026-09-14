@@ -148,3 +148,20 @@ def test_pruning_is_a_fixpoint_with_multi_file_modules(venv: Path, tmp_path: Pat
 
     second = analyze([tmp_path / "code"], tmp_path / "venv")
     assert not build_plan(second).files, "a second pass must find nothing left"
+
+
+def test_binary_scan_resolves_bare_sibling_names(venv: Path, tmp_path: Path):
+    """Cython stores a sibling's bare name, so `_helper` must resolve to `pkg._helper`."""
+    write(venv / "pkg" / "__init__.py", "import pkg.core\n")
+    write_blob(venv / "pkg" / "core.cpython-312-darwin.so", ["_helper", "elsewhere"])
+    write_blob(venv / "pkg" / "_helper.cpython-312-darwin.so", ["x"])
+    write(venv / "elsewhere" / "__init__.py", "")
+    write(tmp_path / "code" / "app.py", "import pkg\n")
+
+    blind = analyze([tmp_path / "code"], tmp_path / "venv")
+    assert "pkg._helper" in {i.name for i in blind.unused()}
+
+    seeing = analyze([tmp_path / "code"], tmp_path / "venv", Options(scan_binaries=True))
+    unused = {i.name for i in seeing.unused()}
+    assert "pkg._helper" not in unused, "the bare sibling name resolves against its package"
+    assert "elsewhere" not in unused, "a fully-qualified match still works"

@@ -34,6 +34,7 @@ _KEYS = {
     "prune-dev",
     "scan-binaries",
     "strict-dynamic",
+    "keep-main-modules",
     "keep-distributions",
     "prune-script-packages",
     "strip-pycache",

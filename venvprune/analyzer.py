@@ -153,6 +153,9 @@ def analyze(
     walk_task.advance(len(reach.reached))
     walk_task.done()
 
+    if options.keep_main_modules:
+        _keep_main_modules(graph, reach, options)
+
     traced: set[str] = set()
     if trace is not None:
         traced = site_relative_names(trace, site_dirs)
@@ -185,8 +188,20 @@ def _add_binary_edges(modules: dict[str, ModuleInfo], reporter: progress.Reporte
     task = reporter.task("Scanning binaries", total=len(extensions))
     for name, info in extensions.items():
         task.advance()
-        found = native.imports_from_binary(info.path, names) - {name}
+        package = name.rpartition(".")[0]
+        found = native.imports_from_binary(info.path, names, package) - {name}
         info.edges = [ImportEdge(name, target, EdgeKind.LAZY, 0, 0) for target in sorted(found) if target != name]
+
+
+def _keep_main_modules(graph: ModuleGraph, reach: Reachability, options: Options) -> None:
+    """`python -m pkg` runs pkg.__main__, which nothing imports, so walk it from its package."""
+    mains = [name for name in graph.modules if name.endswith(".__main__") and name.rpartition(".")[0] in reach.reached]
+    if not mains:
+        return
+    extra = graph.reachable(mains, options)
+    for name, kind in extra.reached.items():
+        reach.reached.setdefault(name, kind)
+    reach.unresolved.extend(extra.unresolved)
 
 
 def _entry_point_roots(

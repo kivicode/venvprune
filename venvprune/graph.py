@@ -43,6 +43,9 @@ class Options:
 
     pyproject: Path | None = None
 
+    keep_main_modules: bool = True
+    """Keep `pkg/__main__.py` of a surviving package: `python -m pkg` never imports it."""
+
     keep: tuple[str, ...] = ()
     """Patterns for modules or distributions that must survive whatever the graph says."""
 

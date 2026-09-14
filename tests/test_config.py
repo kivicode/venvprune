@@ -63,7 +63,7 @@ def test_config_file_supplies_code_and_venv(tmp_path: Path):
         'keep = ["tooling"]\nformat = "paths"\n',
     )
     args = build_parser().parse_args(["--config", str(root / "pyproject.toml")])
-    code, venv, options, cfg, output = _resolve(args)
+    code, venv, options, _cfg, output = _resolve(args)
     assert [p.name for p in code] == ["code"]
     assert venv is not None and venv.name == "venv"
     assert options.keep == ("tooling",)
@@ -122,3 +122,22 @@ def test_missing_roots_is_an_error(tmp_path: Path, capsys, monkeypatch):
     monkeypatch.chdir(tmp_path)
     assert main(["--no-config"]) == 2
     assert "no code roots" in capsys.readouterr().err
+
+
+def test_missing_config_file_is_an_explicit_error(tmp_path: Path, capsys):
+    assert main(["--config", str(tmp_path / "nope.toml")]) == 2
+    err = capsys.readouterr().err
+    assert "config file not found" in err
+    assert "no code roots" not in err, "the real cause must not be masked"
+
+
+def test_config_without_a_section_is_an_error(tmp_path: Path, capsys):
+    write(tmp_path / "pyproject.toml", '[project]\nname = "p"\nversion = "0"\n')
+    assert main(["--config", str(tmp_path / "pyproject.toml")]) == 2
+    assert "has no [tool.venvprune] section" in capsys.readouterr().err
+
+
+def test_invalid_toml_is_an_error(tmp_path: Path, capsys):
+    write(tmp_path / "bad.toml", "[tool.venvprune\nkeep = ")
+    assert main(["--config", str(tmp_path / "bad.toml")]) == 2
+    assert "not valid TOML" in capsys.readouterr().err

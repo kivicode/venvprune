@@ -125,6 +125,8 @@ def build_parser() -> argparse.ArgumentParser:
 def _resolve(args: argparse.Namespace) -> tuple[list[Path], Path | None, Options, config_mod.FileConfig, str]:
     search = [*args.code, Path.cwd()]
     cfg = config_mod.FileConfig() if args.no_config else config_mod.load(args.config, search)
+    if args.config is not None and cfg.empty_section:
+        raise config_mod.ConfigError(f"{args.config} has no [tool.{config_mod.SECTION}] section")
     base = cfg.path.parent if cfg.path is not None else None
 
     code = [*(Path(p) for p in (cfg.get("code") or [])), *args.code]
@@ -160,7 +162,11 @@ def _resolve(args: argparse.Namespace) -> tuple[list[Path], Path | None, Options
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    code, venv, options, cfg, output = _resolve(args)
+    try:
+        code, venv, options, cfg, output = _resolve(args)
+    except config_mod.ConfigError as exc:
+        print(f"venvprune: {exc}", file=sys.stderr)
+        return 2
 
     if cfg.unknown:
         print(f"venvprune: ignoring unknown [tool.venvprune] keys: {', '.join(cfg.unknown)}", file=sys.stderr)

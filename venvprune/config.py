@@ -42,11 +42,17 @@ _KEYS = {
 }
 
 
+class ConfigError(Exception):
+    """An explicitly requested config file is missing or unreadable."""
+
+
 @dataclass
 class FileConfig:
     path: Path | None = None
     values: dict[str, Any] = field(default_factory=dict)
     unknown: list[str] = field(default_factory=list)
+    empty_section: bool = False
+    """The file was read but declares no [tool.venvprune]."""
 
     def get(self, key: str, fallback: Any = None) -> Any:
         return self.values.get(key, fallback)
@@ -61,15 +67,19 @@ def load(explicit: Path | None = None, search_from: list[Path] | None = None) ->
             if found is not None:
                 path = found
                 break
+    if explicit is not None and not explicit.is_file():
+        raise ConfigError(f"config file not found: {explicit}")
     if path is None or not path.is_file():
         return FileConfig()
     try:
         data = tomllib.loads(path.read_text(encoding="utf-8"))
-    except (OSError, tomllib.TOMLDecodeError):
-        return FileConfig(path=path)
+    except OSError as exc:
+        raise ConfigError(f"cannot read {path}: {exc}") from exc
+    except tomllib.TOMLDecodeError as exc:
+        raise ConfigError(f"{path} is not valid TOML: {exc}") from exc
     section = data.get("tool", {}).get(SECTION)
     if not isinstance(section, dict):
-        return FileConfig(path=path)
+        return FileConfig(path=path, empty_section=True)
     unknown = sorted(k for k in section if k not in _KEYS)
     return FileConfig(path=path, values=section, unknown=unknown)
 

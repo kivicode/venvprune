@@ -15,7 +15,7 @@ from venvprune.model import (
     ModuleInfo,
 )
 
-_IMPORTLIB_FUNCS = {"import_module", "__import__", "find_spec", "util.find_spec"}
+_IMPORTLIB_FUNCS = {"import_module", "__import__", "find_spec", "reload", "invalidate_caches"}
 _PKGUTIL_FUNCS = {"iter_modules", "walk_packages", "get_loader", "resolve_name", "extend_path"}
 
 
@@ -99,7 +99,11 @@ class _Visitor(ast.NodeVisitor):
         for binding in bindings:
             self._module_locals.add(binding.local)
         if target == "importlib" or target.startswith("importlib."):
-            self._importlib_aliases.update(a.asname or a.name for a in node.names)
+            # Only the functions that actually import: `importlib.resources.files` and friends
+            # read package data and must not be mistaken for a dynamic import.
+            self._importlib_aliases.update(
+                a.asname or a.name for a in node.names if a.name in _IMPORTLIB_FUNCS or a.name == "util"
+            )
         elif target == "pkgutil":
             self._pkgutil_aliases.update(a.asname or a.name for a in node.names)
 

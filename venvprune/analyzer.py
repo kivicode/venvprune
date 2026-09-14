@@ -6,9 +6,18 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from venvprune import astscan, discovery, projectmeta
+from venvprune import astscan, discovery, native, projectmeta
 from venvprune.graph import ModuleGraph, Options
-from venvprune.model import Distribution, DynamicHint, DynamicKind, EdgeKind, ModuleInfo, Origin, Reachability
+from venvprune.model import (
+    Distribution,
+    DynamicHint,
+    DynamicKind,
+    EdgeKind,
+    ImportEdge,
+    ModuleInfo,
+    Origin,
+    Reachability,
+)
 from venvprune.trace import TraceResult, site_relative_names
 
 
@@ -61,6 +70,9 @@ class Analysis:
             hints.extend(info.hints)
         return sorted(hints, key=lambda h: (h.module, h.lineno))
 
+    def extension_modules(self) -> dict[str, ModuleInfo]:
+        return native.extension_modules(self.modules)
+
     def unused_bytes(self) -> int:
         return sum(i.path.stat().st_size for i in self.unused() if i.path.exists() and i.path.is_file())
 
@@ -100,6 +112,8 @@ def analyze(
         merged[name] = info
 
     astscan.scan_all(merged)
+    if options.scan_binaries:
+        _add_binary_edges(merged)
     graph = ModuleGraph(merged, discovery.stdlib_module_names())
 
     roots = graph.local_roots() + [r for r in options.extra_roots if r in merged]
@@ -128,6 +142,14 @@ def analyze(
     if options.prune_dev_groups is not None:
         _apply_dev_prune(analysis, code_roots, venv, options)
     return analysis
+
+
+def _add_binary_edges(modules: dict[str, ModuleInfo]) -> None:
+    """Give each extension module the imports its string table reveals, as lazy edges."""
+    names = set(modules)
+    for name, info in native.extension_modules(modules).items():
+        found = native.imports_from_binary(info.path, names) - {name}
+        info.edges = [ImportEdge(name, target, EdgeKind.LAZY, 0, 0) for target in sorted(found) if target != name]
 
 
 def _entry_point_roots(

@@ -24,7 +24,8 @@ _SKIP_DIRS = {
 }
 
 _SOURCE_SUFFIXES = (".py", ".pyi")
-_EXT_SUFFIXES = (".so", ".pyd", ".dylib")
+# `.dylib` is a shared library, not an importable module.
+_EXT_SUFFIXES = (".so", ".pyd")
 
 
 def stdlib_module_names() -> frozenset[str]:

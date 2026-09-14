@@ -44,6 +44,9 @@ class Options:
     entry_point_groups: tuple[str, ...] = ()
     """Entry-point groups whose advertised modules count as roots."""
 
+    scan_binaries: bool = False
+    """Recover imports embedded in compiled extension modules by scanning their strings."""
+
     strict_dynamic: bool = False
     """Keep nothing for a dynamic site that cannot be bounded, instead of its whole package."""
 

@@ -6,7 +6,7 @@ import argparse
 import sys
 from pathlib import Path
 
-from venvprune import report, rewrite, risk, tree
+from venvprune import native, report, rewrite, risk, tree
 from venvprune.analyzer import analyze
 from venvprune.graph import Options
 from venvprune.projectmeta import DEFAULT_DEV_GROUPS
@@ -22,7 +22,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--venv", required=True, type=Path, help="virtualenv (or site-packages) to prune")
     parser.add_argument(
         "--format",
-        choices=("text", "json", "paths", "tree", "rewrites", "risk"),
+        choices=("text", "json", "paths", "tree", "rewrites", "risk", "native"),
         default="text",
         help="output format (default: text)",
     )
@@ -52,6 +52,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="symbol precision: follow an __init__ re-export only if the name it binds is used",
     )
 
+    follow.add_argument(
+        "--scan-binaries",
+        action="store_true",
+        help="recover imports embedded in compiled extension modules by scanning their strings",
+    )
     follow.add_argument(
         "--strict-dynamic",
         action="store_true",
@@ -129,6 +134,7 @@ def main(argv: list[str] | None = None) -> int:
         extra_roots=list(args.extra_roots),
         symbol_precision=args.symbols,
         strict_dynamic=args.strict_dynamic,
+        scan_binaries=args.scan_binaries,
         entry_point_groups=tuple(args.entry_point_groups),
         prune_dev_groups=(tuple(args.dev_groups) or DEFAULT_DEV_GROUPS) if args.prune_dev else None,
         pyproject=args.pyproject,
@@ -157,6 +163,14 @@ def main(argv: list[str] | None = None) -> int:
         for plan in plans:
             plan.apply()
         print(f"venvprune: rewrote {len(plans)} __init__.py file(s)", file=sys.stderr)
+
+    if args.format == "native":
+        extensions = analysis.extension_modules()
+        unused_names = {i.name for i in analysis.unused()}
+        kept_paths = [i.path for n, i in extensions.items() if n not in unused_names]
+        libs = native.attribute_libraries(kept_paths, native.bundled_libraries(analysis.site_dirs))
+        print(native.render_report(native.find_variants(analysis.site_dirs), libs, extensions, unused_names))
+        return 0
 
     if args.format == "risk":
         print(risk.render(risk.assess(analysis), verbose=args.verbose))

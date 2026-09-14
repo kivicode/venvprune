@@ -3,55 +3,58 @@
 ## Phase 1 — find unreachable modules ✅
 
 Cross-library import graph over code roots + `site-packages`, eager/lazy/type-only/re-export
-edge classification, dynamic-import risk detection, optional runtime trace merge. Reports
-unused modules, fully unused distributions, and reclaimable bytes.
+edge classification, optional runtime trace merge. Reports unused modules, fully unused
+distributions, and reclaimable bytes.
 
-## Phase 2 — modules imported only incidentally
+## Phase 2 — modules imported only incidentally ✅
 
-Distinguish "your code needs this" from "this got dragged in anyway". The edge kinds are
-already recorded; what is missing is the rewrite side.
+`--symbols` tracks what each import binds and which attributes are actually read off it, then
+propagates a demand set through the graph, so `import pkg` plus one `pkg.thing` no longer keeps
+the whole package. `--format rewrites` emits (and `--apply-rewrites` writes) the `__init__.py`
+patch that makes the freed modules deletable, guarded by a PEP 562 `__getattr__`.
 
-- [ ] `type_only` promotion: an annotation-only import that is *not* under `TYPE_CHECKING`
-      still executes. Detect when it is only ever used in an annotation position and the module
-      already has (or can be given) `from __future__ import annotations`, making it droppable.
-- [ ] Re-export chains: `pkg/__init__.py` imports `pkg.heavy` purely to republish one name that
-      the code never touches. Needs per-name usage tracking, not just per-module — resolve
-      `from pkg import X` to the defining module and drop the rest of the `__init__` body.
-- [ ] Emit a patch set: minimal edits to a library's `__init__.py` (lazy `__getattr__`
-      per PEP 562, or deleting unused re-export lines) that let the unused modules go.
-- [ ] Verify each proposed rewrite by re-running the analysis plus the project's own tests.
+Remaining:
 
-## Phase 3 — dynamic-import safety gating
+- [ ] Annotation-only imports that are *not* under `TYPE_CHECKING` still execute. Detect when a
+      name is used only in annotation position and the module can take
+      `from __future__ import annotations`, then move the import into a `TYPE_CHECKING` block.
+- [ ] Narrow a partially-used `from .x import A, B` statement instead of keeping it whole.
+- [ ] Re-run the project's own tests after applying a rewrite, as an automatic verification gate.
 
-Sites are already detected (`importlib`, `__import__`, `pkgutil`, `import *`, entry points,
-`getattr` over a module). What is missing is severity and resolution.
+## Phase 3 — dynamic-import safety gating ✅
 
-- [ ] Constant folding: `importlib.import_module("pkg.backend_" + name)` where `name` comes from
-      a bounded literal set — enumerate the candidates instead of keeping the whole subtree.
-- [ ] Distinguish self-referential dynamic imports (a package importing its own submodules) from
-      open-ended ones (importing a user-supplied name); only the latter is unbounded.
-- [ ] Entry-point resolution: read `entry_points.txt` from every dist-info and treat advertised
-      targets as roots when the code loads that group.
-- [ ] Per-package risk score, and a `--unsafe` gate that refuses to propose rewrites inside a
-      package whose dynamic behaviour cannot be bounded.
+Argument shapes are folded (literal, prefix, bounded literal set, package-relative), entry
+points are read from `dist-info` and become roots, and `--format risk` scores every site
+`resolved` / `confined` / `open`. `--strict-dynamic` refuses to keep anything for an unbounded
+site.
 
-## Phase 4 — shipped binary artifacts
+Remaining:
 
-- [ ] Decide necessity of shipped `.so` / `.pyd` / `.dylib` extension modules. They are indexed
-      today and participate in reachability by name, but nothing looks *inside* them: a native
-      module can import Python modules from C (`PyImport_ImportModule`), and one wheel often
-      ships several alternative builds (SIMD variants, CUDA vs CPU, per-arch fat binaries) where
-      only one is ever loaded.
-- [ ] Extract imported names from the binary (symbol/string scan, `PyImport_*` call sites) and
-      feed them back into the graph as edges.
-- [ ] Detect multi-variant artifact sets and mark the ones the target platform can never dlopen.
-- [ ] Follow shared-library dependencies (`otool -L` / `ldd`) so bundled `.dylibs`/`*.libs`
-      directories are pruned alongside the extension that needs them.
+- [ ] Follow a name through a local variable across statements (simple constant propagation),
+      not just direct assignment and `for` targets.
+- [ ] Resolve `getattr(module, name)` where `name` comes from a literal registry dict.
+- [ ] Treat a package's own `__getattr__` (PEP 562 lazy loader) as a re-export table rather
+      than an opaque dynamic site — several large libraries now ship one.
+
+## Phase 4 — shipped binary artifacts ✅
+
+`--scan-binaries` recovers module names from an extension's string table and feeds them back as
+lazy edges. `--format native` reports extension modules, multi-build wheels whose other builds
+this interpreter can never load, and bundled `.dylibs` / `.libs` attributed to the extensions
+that link them.
+
+Remaining:
+
+- [ ] Parse the import table properly (Mach-O / ELF symbol and relocation entries for
+      `PyImport_*`) instead of matching every plausible string against the index.
+- [ ] Detect SIMD/CUDA variant sets that share one ABI tag but differ by runtime dispatch.
+- [ ] Transitively prune bundled libraries that only other pruned libraries link against.
 
 ## Cross-cutting
 
-- [ ] Performance: ~45 s on a 10.5k-module venv, single-threaded. Parallelise the AST pass and
-      cache parse results keyed by (path, mtime, size).
+- [ ] Performance: ~20-45 s on a 10.5k-module venv, single-threaded. Parallelise the AST pass
+      and cache parse results keyed by (path, mtime, size).
 - [ ] `--explain <module>` to print the shortest import chain that keeps a module alive
-      (the data is already in `Reachability.why`).
-- [ ] Apply mode: actually delete pruned files, with a manifest for rollback.
+      (`Reachability.why` already holds the data).
+- [ ] Apply mode: delete pruned files, with a manifest for rollback.
+- [ ] Windows: `linked_libraries` has no implementation there (returns empty).

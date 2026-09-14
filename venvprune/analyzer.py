@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from venvprune import astscan, discovery, native, progress, projectmeta
+from venvprune import config as config_mod
 from venvprune.graph import ModuleGraph, Options
 from venvprune.model import (
     Distribution,
@@ -34,6 +35,12 @@ class Analysis:
 
     dev_only: set[str] = field(default_factory=set)
     """Distributions declared only in a dev group, minus those the code imports directly."""
+
+    kept_by_config: set[str] = field(default_factory=set)
+    """Modules forced to survive by a keep pattern."""
+
+    unmatched_keep: set[str] = field(default_factory=set)
+    """Keep patterns that matched nothing, so a stale entry can be reported."""
 
     dev_forced: set[str] = field(default_factory=set)
     """Modules pruned because they belong to a dev-only distribution, despite being reachable."""
@@ -75,6 +82,18 @@ class Analysis:
 
     def unused_bytes(self) -> int:
         return sum(i.path.stat().st_size for i in self.unused() if i.path.exists() and i.path.is_file())
+
+    def script_distributions(self) -> set[str]:
+        """Distributions advertising console/GUI scripts, i.e. meant to be run as programs.
+
+        The launcher in `bin/` imports the package (or is a binary shipped beside it), so
+        removing its modules can break a command the project shells out to — something no
+        import graph can see.
+        """
+        groups = {"console_scripts", "gui_scripts"}
+        return {
+            projectmeta.canonical(name) for name, dist in self.distributions.items() if groups & set(dist.entry_points)
+        }
 
     def fully_unused_distributions(self) -> list[str]:
         unused = {i.name for i in self.unused()}
@@ -123,10 +142,14 @@ def analyze(
         _add_binary_edges(merged, reporter)
     graph = ModuleGraph(merged, discovery.stdlib_module_names(), options)
 
+    dist_of = _map_modules_to_dists(merged, dists)
+    kept_by_config, unmatched_keep = config_mod.expand_keep(list(options.keep), merged, dist_of)
+
     walk_task = reporter.task("Resolving imports", total=None)
     roots = graph.local_roots() + [r for r in options.extra_roots if r in merged]
     roots += _entry_point_roots(merged, dists, options)
     roots += [name for name in discovery.pth_imports(site_dirs) if name in merged]
+    roots += sorted(kept_by_config)
     reach = graph.reachable(roots, options)
     walk_task.advance(len(reach.reached))
     walk_task.done()
@@ -139,7 +162,6 @@ def analyze(
                 if parent in merged:
                     reach.reached.setdefault(parent, EdgeKind.EAGER)
 
-    dist_of = _map_modules_to_dists(merged, dists)
     analysis = Analysis(
         graph=graph,
         reach=reach,
@@ -148,6 +170,8 @@ def analyze(
         distributions=dists,
         traced=traced,
         dist_of=dist_of,
+        kept_by_config=kept_by_config,
+        unmatched_keep=unmatched_keep,
     )
 
     if options.prune_dev_groups is not None:
@@ -226,7 +250,7 @@ def _apply_dev_prune(analysis: Analysis, code_roots: list[Path], venv: Path, opt
     analysis.dev_forced = {
         name
         for name, owner in analysis.dist_of.items()
-        if owner in analysis.dev_only and name in analysis.reach.reached
+        if owner in analysis.dev_only and name in analysis.reach.reached and name not in analysis.kept_by_config
     }
 
 

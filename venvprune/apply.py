@@ -22,6 +22,8 @@ class Plan:
     files: list[Path] = field(default_factory=list)
     dirs: list[Path] = field(default_factory=list)
     distributions: list[str] = field(default_factory=list)
+    kept_for_scripts: list[str] = field(default_factory=list)
+    """Unreachable distributions spared because they install a command."""
 
     @property
     def total_bytes(self) -> int:
@@ -34,10 +36,20 @@ class Plan:
         return bool(self.files or self.dirs)
 
 
-def build_plan(analysis: Analysis, whole_distributions: bool = True, include_libs: bool = True) -> Plan:
+def build_plan(
+    analysis: Analysis,
+    whole_distributions: bool = True,
+    include_libs: bool = True,
+    prune_script_packages: bool = False,
+) -> Plan:
     plan = Plan()
     seen: set[Path] = set()
     dead_dists = set(analysis.fully_unused_distributions()) if whole_distributions else set()
+    if not prune_script_packages:
+        scripts = analysis.script_distributions()
+        held = {d for d in dead_dists if projectmeta.canonical(d) in scripts}
+        plan.kept_for_scripts = sorted(held)
+        dead_dists -= held
     plan.distributions = sorted(dead_dists)
 
     dist_dirs: set[Path] = set()
@@ -56,10 +68,15 @@ def build_plan(analysis: Analysis, whole_distributions: bool = True, include_lib
                     seen.add(top)
             dist_dirs.update(_metadata_dirs(name, dist.version, analysis.site_dirs))
 
-    # Everything the module graph found, minus anything already covered by a whole directory.
+    # Everything the module graph found, minus anything already covered by a whole directory
+    # and anything belonging to a distribution spared for its console scripts.
+    spared = {projectmeta.canonical(d) for d in plan.kept_for_scripts}
     for info in analysis.unused():
-        if info.path.is_file() and not _inside(info.path, dist_dirs):
-            seen.add(info.path)
+        if not info.path.is_file() or _inside(info.path, dist_dirs):
+            continue
+        if spared and analysis.dist_of.get(info.name) in spared:
+            continue
+        seen.add(info.path)
 
     if include_libs:
         kept = [
@@ -109,6 +126,7 @@ def execute(plan: Plan, site_dirs: list[Path], manifest_dir: Path | None = None)
     manifest = {
         "site_packages": [str(d) for d in site_dirs],
         "distributions": plan.distributions,
+        "kept_for_scripts": plan.kept_for_scripts,
         "files": [str(p) for p in plan.files],
         "dirs": [str(p) for p in plan.dirs],
         "bytes": plan.total_bytes,
@@ -137,4 +155,9 @@ def render_plan(plan: Plan) -> str:
         lines.append("")
         lines.append(f"Distributions removed whole ({len(plan.distributions)}):")
         lines.append(f"  {', '.join(plan.distributions)}")
+    if plan.kept_for_scripts:
+        lines.append("")
+        lines.append(f"Unreachable but kept, they install a command ({len(plan.kept_for_scripts)}):")
+        lines.append(f"  {', '.join(plan.kept_for_scripts)}")
+        lines.append("  (--prune-script-packages removes these too)")
     return "\n".join(lines)

@@ -209,3 +209,47 @@ def test_assignment_target_is_not_a_reference():
 def test_augmented_assignment_counts_as_a_read():
     table = table_of("counter = 0\n\n\ndef bump():\n    global counter\n    counter += 1\n")
     assert "counter" in table.definitions["bump"][0].refs
+
+
+def test_cascade_is_transitive_in_one_pass(tmp_path: Path):
+    """A dead function frees its import, which frees a module, whose imports free more."""
+    site = tmp_path / "venv" / "lib" / "python3.12" / "site-packages"
+    write(site / "top" / "__init__.py", "from top.core import wanted, junk\n")
+    write(
+        site / "top" / "core.py",
+        "import level1\n\n\ndef wanted():\n    return 1\n\n\ndef junk():\n    return level1.go()\n",
+    )
+    write(site / "level1" / "__init__.py", "import level2\n\n\ndef go():\n    return level2.go()\n")
+    write(site / "level2" / "__init__.py", "import level3\n\n\ndef go():\n    return level3.go()\n")
+    write(site / "level3" / "__init__.py", "def go():\n    return 3\n")
+    write(tmp_path / "code" / "app.py", "from top import wanted\n\nwanted()\n")
+
+    analysis = analyze([tmp_path / "code"], tmp_path / "venv", DEFS)
+    unused = {i.name for i in analysis.unused()}
+    assert unused == {"level1", "level2", "level3"}, "one dead function collapses the whole chain"
+
+
+def test_analysis_is_a_fixpoint(tmp_path: Path):
+    """Re-running after applying rewrites finds nothing further: the walk already converged."""
+    site = tmp_path / "venv" / "lib" / "python3.12" / "site-packages"
+    write(site / "top" / "__init__.py", "from top.core import wanted, junk\n")
+    write(
+        site / "top" / "core.py",
+        "import level1\n\n\ndef wanted():\n    return 1\n\n\ndef junk():\n    return level1.go()\n",
+    )
+    write(site / "level1" / "__init__.py", "import level2\n\n\ndef go():\n    return level2.go()\n")
+    write(site / "level2" / "__init__.py", "def go():\n    return 2\n")
+    write(tmp_path / "code" / "app.py", "from top import wanted\n\nwanted()\n")
+
+    first = analyze([tmp_path / "code"], tmp_path / "venv", DEFS)
+    first_unused = {i.name for i in first.unused()}
+    for plan in plan_definition_rewrites(first):
+        plan.apply(backup_suffix="")
+    for info in first.unused():
+        if info.path.is_file():
+            info.path.unlink()
+
+    second = analyze([tmp_path / "code"], tmp_path / "venv", DEFS)
+    assert not second.unused(), "a second pass has nothing left to remove"
+    assert not plan_definition_rewrites(second), "and nothing left to rewrite"
+    assert first_unused == {"level1", "level2"}

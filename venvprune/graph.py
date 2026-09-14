@@ -43,6 +43,9 @@ class Options:
 
     pyproject: Path | None = None
 
+    keep: tuple[str, ...] = ()
+    """Patterns for modules or distributions that must survive whatever the graph says."""
+
     entry_point_groups: tuple[str, ...] = ()
     """Entry-point groups whose advertised modules count as roots."""
 

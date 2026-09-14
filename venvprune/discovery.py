@@ -140,6 +140,7 @@ def read_distributions(site_dirs: list[Path]) -> dict[str, Distribution]:
             meta = _read_metadata(info_dir / "METADATA")
             name = meta.get("name") or info_dir.name.split("-")[0]
             dist = dists.setdefault(name, Distribution(name=name, version=meta.get("version", "")))
+            dist.entry_points.update(_read_entry_points(info_dir / "entry_points.txt"))
             for rel in _record_paths(info_dir):
                 path = (site / rel).resolve()
                 dist.files.append(path)
@@ -149,6 +150,24 @@ def read_distributions(site_dirs: list[Path]) -> dict[str, Distribution]:
                 if top.isidentifier():
                     dist.top_level.add(top)
     return dists
+
+
+def _read_entry_points(path: Path) -> dict[str, dict[str, str]]:
+    if not path.exists():
+        return {}
+    out: dict[str, dict[str, str]] = {}
+    group = ""
+    for raw in path.read_text(encoding="utf-8", errors="replace").splitlines():
+        line = raw.split("#", 1)[0].strip()
+        if not line:
+            continue
+        if line.startswith("[") and line.endswith("]"):
+            group = line[1:-1].strip()
+            out.setdefault(group, {})
+        elif "=" in line and group:
+            name, _, target = line.partition("=")
+            out[group][name.strip()] = target.strip()
+    return out
 
 
 def _read_metadata(path: Path) -> dict[str, str]:

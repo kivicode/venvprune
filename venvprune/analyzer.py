@@ -8,7 +8,7 @@ from pathlib import Path
 
 from venvprune import astscan, discovery, projectmeta
 from venvprune.graph import ModuleGraph, Options
-from venvprune.model import Distribution, DynamicHint, EdgeKind, ModuleInfo, Origin, Reachability
+from venvprune.model import Distribution, DynamicHint, DynamicKind, EdgeKind, ModuleInfo, Origin, Reachability
 from venvprune.trace import TraceResult, site_relative_names
 
 
@@ -103,6 +103,7 @@ def analyze(
     graph = ModuleGraph(merged, discovery.stdlib_module_names())
 
     roots = graph.local_roots() + [r for r in options.extra_roots if r in merged]
+    roots += _entry_point_roots(merged, dists, options)
     reach = graph.reachable(roots, options)
 
     traced: set[str] = set()
@@ -127,6 +128,29 @@ def analyze(
     if options.prune_dev_groups is not None:
         _apply_dev_prune(analysis, code_roots, venv, options)
     return analysis
+
+
+def _entry_point_roots(
+    modules: Mapping[str, ModuleInfo], dists: Mapping[str, Distribution], options: Options
+) -> list[str]:
+    """Modules advertised by the entry-point groups the code is known to load."""
+    groups = set(options.entry_point_groups)
+    for info in modules.values():
+        if info.origin is not Origin.LOCAL:
+            continue
+        groups.update(value for hint in info.hints if hint.kind is DynamicKind.ENTRY_POINTS for value in hint.values)
+    if not groups:
+        return []
+    roots: list[str] = []
+    for dist in dists.values():
+        for group, entries in dist.entry_points.items():
+            if group not in groups:
+                continue
+            for target in entries.values():
+                module = target.split(":", 1)[0].strip()
+                if module in modules:
+                    roots.append(module)
+    return roots
 
 
 def _map_modules_to_dists(modules: Mapping[str, ModuleInfo], dists: Mapping[str, Distribution]) -> dict[str, str]:

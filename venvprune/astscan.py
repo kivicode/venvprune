@@ -4,7 +4,16 @@ from __future__ import annotations
 
 import ast
 
-from venvprune.model import Binding, Demand, DynamicHint, DynamicKind, EdgeKind, ImportEdge, ModuleInfo
+from venvprune.model import (
+    ArgShape,
+    Binding,
+    Demand,
+    DynamicHint,
+    DynamicKind,
+    EdgeKind,
+    ImportEdge,
+    ModuleInfo,
+)
 
 _IMPORTLIB_FUNCS = {"import_module", "__import__", "find_spec", "util.find_spec"}
 _PKGUTIL_FUNCS = {"iter_modules", "walk_packages", "get_loader", "resolve_name", "extend_path"}
@@ -28,6 +37,8 @@ class _Visitor(ast.NodeVisitor):
         """Imported binding -> attributes read off it, or Demand.ALL for opaque use."""
 
         self.exported: tuple[str, ...] | None = None
+        self._literals: dict[str, tuple[str, ...]] = {}
+        """Local name -> the literal strings it can hold, for bounded dynamic imports."""
 
     # --- classification -------------------------------------------------
     def _kind(self) -> EdgeKind:
@@ -127,6 +138,19 @@ class _Visitor(ast.NodeVisitor):
     def visit_Assign(self, node: ast.Assign) -> None:
         if self.exported is None and (names := _all_literal(node)) is not None:
             self.exported = names
+        strings = _string_literals(node.value)
+        if strings:
+            for target in node.targets:
+                if isinstance(target, ast.Name):
+                    self._literals[target.id] = strings
+        self.generic_visit(node)
+
+    def visit_For(self, node: ast.For) -> None:
+        strings = _string_literals(node.iter)
+        if not strings and isinstance(node.iter, ast.Name):
+            strings = self._literals.get(node.iter.id, ())
+        if strings and isinstance(node.target, ast.Name):
+            self._literals[node.target.id] = strings
         self.generic_visit(node)
 
     def _record(self, name: str, attr: str | None) -> None:
@@ -147,20 +171,53 @@ class _Visitor(ast.NodeVisitor):
         if dotted:
             hint = self._classify_call(dotted, node)
             if hint is not None:
-                self.hints.append(DynamicHint(self.module, hint, node.lineno, _render(node, dotted)))
+                shape, values, package = self._shape_of(hint, node)
+                self.hints.append(
+                    DynamicHint(self.module, hint, node.lineno, _render(node, dotted), shape, values, package)
+                )
         self.generic_visit(node)
+
+    def _shape_of(self, kind: DynamicKind, node: ast.Call) -> tuple[ArgShape, tuple[str, ...], str | None]:
+        if kind in {DynamicKind.PKGUTIL, DynamicKind.GETATTR_MODULE, DynamicKind.ENTRY_POINTS}:
+            return self._plain_arg_shape(node)
+        if not node.args:
+            return ArgShape.UNKNOWN, (), None
+        shape, values = self._expr_shape(node.args[0])
+        package = None
+        for candidate in [*node.args[1:2], *(kw.value for kw in node.keywords if kw.arg == "package")]:
+            if isinstance(candidate, ast.Constant) and isinstance(candidate.value, str):
+                package = candidate.value
+            elif _dotted(candidate) == "__package__":
+                package = self.package
+        return shape, values, package
+
+    def _plain_arg_shape(self, node: ast.Call) -> tuple[ArgShape, tuple[str, ...], str | None]:
+        for arg in [*node.args, *(kw.value for kw in node.keywords)]:
+            if isinstance(arg, ast.Constant) and isinstance(arg.value, str):
+                return ArgShape.LITERAL, (arg.value,), None
+        return ArgShape.UNKNOWN, (), None
+
+    def _expr_shape(self, expr: ast.expr) -> tuple[ArgShape, tuple[str, ...]]:
+        if isinstance(expr, ast.Constant) and isinstance(expr.value, str):
+            return ArgShape.LITERAL, (expr.value,)
+        if isinstance(expr, ast.Name) and expr.id in self._literals:
+            return ArgShape.CHOICES, self._literals[expr.id]
+        prefix = _literal_prefix(expr)
+        if prefix:
+            return ArgShape.PREFIX, (prefix,)
+        return ArgShape.UNKNOWN, ()
 
     def _classify_call(self, dotted: str, node: ast.Call) -> DynamicKind | None:
         head, _, tail = dotted.partition(".")
         leaf = dotted.rsplit(".", 1)[-1]
         if dotted == "__import__":
             return DynamicKind.DUNDER_IMPORT
+        if leaf in {"entry_points", "load_entry_point"}:
+            return DynamicKind.ENTRY_POINTS
         if head in self._importlib_aliases and (leaf in _IMPORTLIB_FUNCS or not tail):
             return DynamicKind.IMPORTLIB
         if head in self._pkgutil_aliases and (leaf in _PKGUTIL_FUNCS or not tail):
             return DynamicKind.PKGUTIL
-        if leaf in {"entry_points", "load_entry_point"}:
-            return DynamicKind.ENTRY_POINTS
         if dotted == "getattr" and node.args:
             base = _dotted(node.args[0])
             if base and base.split(".")[0] in self._module_locals and not _is_literal(node.args[1:2]):
@@ -171,6 +228,30 @@ class _Visitor(ast.NodeVisitor):
 def _is_literal(args: list[ast.expr]) -> bool:
     """A constant attribute name is a plain lookup, not a dynamic dispatch."""
     return bool(args) and isinstance(args[0], ast.Constant)
+
+
+def _string_literals(expr: ast.expr) -> tuple[str, ...]:
+    """Every string in a literal list/tuple/set, or a single constant; empty if not all literal."""
+    if isinstance(expr, ast.Constant) and isinstance(expr.value, str):
+        return (expr.value,)
+    if not isinstance(expr, ast.List | ast.Tuple | ast.Set):
+        return ()
+    items = [e.value for e in expr.elts if isinstance(e, ast.Constant) and isinstance(e.value, str)]
+    return tuple(items) if items and len(items) == len(expr.elts) else ()
+
+
+def _literal_prefix(expr: ast.expr) -> str:
+    """The constant head of an f-string or `+` concatenation, e.g. `pkg.backend_`."""
+    if isinstance(expr, ast.JoinedStr):
+        head = expr.values[0] if expr.values else None
+        if isinstance(head, ast.Constant) and isinstance(head.value, str):
+            return head.value
+        return ""
+    if isinstance(expr, ast.BinOp) and isinstance(expr.op, ast.Add):
+        return _literal_prefix(expr.left)
+    if isinstance(expr, ast.Constant) and isinstance(expr.value, str):
+        return expr.value
+    return ""
 
 
 def _all_literal(node: ast.Assign) -> tuple[str, ...] | None:

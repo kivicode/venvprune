@@ -6,7 +6,17 @@ from collections import deque
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from venvprune.model import Demand, DynamicKind, EdgeKind, ImportEdge, ModuleInfo, Origin, Reachability
+from venvprune.model import (
+    ArgShape,
+    Demand,
+    DynamicHint,
+    DynamicKind,
+    EdgeKind,
+    ImportEdge,
+    ModuleInfo,
+    Origin,
+    Reachability,
+)
 
 _CERTAINTY = {
     EdgeKind.EAGER: 3,
@@ -30,6 +40,12 @@ class Options:
     """Dev dependency groups to prune wholesale; `None` disables dev-group pruning."""
 
     pyproject: Path | None = None
+
+    entry_point_groups: tuple[str, ...] = ()
+    """Entry-point groups whose advertised modules count as roots."""
+
+    strict_dynamic: bool = False
+    """Keep nothing for a dynamic site that cannot be bounded, instead of its whole package."""
 
     symbol_precision: bool = False
     """Follow a package `__init__`'s re-export only when the name it binds is actually used."""
@@ -127,9 +143,9 @@ class ModuleGraph:
                 kind = edge.kind if _CERTAINTY[edge.kind] < _CERTAINTY[incoming] else incoming
                 for target in names:
                     targets.append((target, kind, edge, self._demand_for(info, edge, target, opts)))
-            if opts.dynamic_expands_package and _has_dynamic(info):
-                for sibling in self.subtree(_package_of(info)):
-                    targets.append((sibling, EdgeKind.LAZY, None, Demand.ALL))
+            if opts.dynamic_expands_package:
+                for candidate in self.dynamic_targets(info, opts):
+                    targets.append((candidate, EdgeKind.LAZY, None, Demand.ALL))
 
             for target, kind, edge, asked in targets:
                 grew = want(target, asked)
@@ -144,6 +160,51 @@ class ModuleGraph:
                 queue.append((target, reached[target]))
 
         return Reachability(reached=reached, why=why, unresolved=unresolved, demand=demand, skipped_reexports=skipped)
+
+    def dynamic_targets(self, info: ModuleInfo, opts: Options) -> set[str]:
+        """Modules that a module's dynamic-import sites could plausibly load."""
+        out: set[str] = set()
+        for hint in info.hints:
+            if hint.kind is DynamicKind.ENTRY_POINTS:
+                continue
+            resolved = self.resolve_hint(info, hint)
+            if resolved is None:
+                if opts.strict_dynamic:
+                    continue
+                out.update(self.subtree(_package_of(info)))
+            else:
+                out.update(resolved)
+        return out
+
+    def resolve_hint(self, info: ModuleInfo, hint: DynamicHint) -> set[str] | None:
+        """Candidate modules for one dynamic site, or None when it cannot be bounded."""
+        anchor = hint.package_arg or _package_of(info)
+        if hint.kind is DynamicKind.GETATTR_MODULE:
+            # `getattr(pkg, name)` can only reach what is already under that package.
+            return set(self.subtree(_package_of(info)))
+        if hint.kind is DynamicKind.PKGUTIL:
+            return set(self.subtree(_package_of(info)))
+        if not hint.bounded:
+            return None
+        out: set[str] = set()
+        for value in hint.values:
+            absolute = self._absolutise(value, anchor)
+            if hint.shape is ArgShape.PREFIX:
+                out.update(m for m in self.modules if m.startswith(absolute))
+            elif absolute in self.modules:
+                out.update(self._with_parents(absolute))
+        if hint.shape is ArgShape.PREFIX and not out:
+            return None
+        return out
+
+    def _absolutise(self, value: str, anchor: str) -> str:
+        if not value.startswith("."):
+            return value
+        stripped = value.lstrip(".")
+        level = len(value) - len(stripped)
+        parts = anchor.split(".") if anchor else []
+        base = parts[: len(parts) - (level - 1)] if level > 1 else parts
+        return ".".join([*base, *([stripped] if stripped else [])])
 
     def _edge_is_wanted(self, info: ModuleInfo, edge: ImportEdge, wanted: set[str] | Demand) -> bool:
         """Under symbol precision, an `__init__` re-export survives only if someone needs it."""
@@ -185,10 +246,6 @@ class ModuleGraph:
             (info for name, info in self.modules.items() if info.origin is Origin.SITE and name not in reach.reached),
             key=lambda i: i.name,
         )
-
-
-def _has_dynamic(info: ModuleInfo) -> bool:
-    return any(h.kind is not DynamicKind.ENTRY_POINTS for h in info.hints)
 
 
 def _package_of(info: ModuleInfo) -> str:

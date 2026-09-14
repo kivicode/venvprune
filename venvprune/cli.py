@@ -6,7 +6,7 @@ import argparse
 import sys
 from pathlib import Path
 
-from venvprune import report, rewrite, tree
+from venvprune import report, rewrite, risk, tree
 from venvprune.analyzer import analyze
 from venvprune.graph import Options
 from venvprune.projectmeta import DEFAULT_DEV_GROUPS
@@ -22,7 +22,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--venv", required=True, type=Path, help="virtualenv (or site-packages) to prune")
     parser.add_argument(
         "--format",
-        choices=("text", "json", "paths", "tree", "rewrites"),
+        choices=("text", "json", "paths", "tree", "rewrites", "risk"),
         default="text",
         help="output format (default: text)",
     )
@@ -50,6 +50,20 @@ def build_parser() -> argparse.ArgumentParser:
         "--symbols",
         action="store_true",
         help="symbol precision: follow an __init__ re-export only if the name it binds is used",
+    )
+
+    follow.add_argument(
+        "--strict-dynamic",
+        action="store_true",
+        help="keep nothing for an unbounded dynamic import instead of its whole package",
+    )
+    follow.add_argument(
+        "--entry-point-group",
+        dest="entry_point_groups",
+        action="append",
+        default=[],
+        metavar="GROUP",
+        help="treat modules advertised in this entry-point group as roots (repeatable)",
     )
 
     viz = parser.add_argument_group("tree view")
@@ -114,6 +128,8 @@ def main(argv: list[str] | None = None) -> int:
         dynamic_expands_package=not args.no_dynamic_expand,
         extra_roots=list(args.extra_roots),
         symbol_precision=args.symbols,
+        strict_dynamic=args.strict_dynamic,
+        entry_point_groups=tuple(args.entry_point_groups),
         prune_dev_groups=(tuple(args.dev_groups) or DEFAULT_DEV_GROUPS) if args.prune_dev else None,
         pyproject=args.pyproject,
     )
@@ -141,6 +157,10 @@ def main(argv: list[str] | None = None) -> int:
         for plan in plans:
             plan.apply()
         print(f"venvprune: rewrote {len(plans)} __init__.py file(s)", file=sys.stderr)
+
+    if args.format == "risk":
+        print(risk.render(risk.assess(analysis), verbose=args.verbose))
+        return 0
 
     if args.format == "rewrites":
         print(

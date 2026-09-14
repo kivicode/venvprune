@@ -69,12 +69,36 @@ class ImportEdge:
     """What this statement puts into the importing module's namespace, for symbol precision."""
 
 
+class ArgShape(StrEnum):
+    LITERAL = "literal"
+    """A constant module name: fully resolved."""
+
+    PREFIX = "prefix"
+    """A literal prefix followed by something computed, e.g. f"pkg.backend_{name}"."""
+
+    CHOICES = "choices"
+    """The name comes from a bounded set of literals visible in the same module."""
+
+    UNKNOWN = "unknown"
+    """Nothing can be said about the name."""
+
+
 @dataclass(frozen=True)
 class DynamicHint:
     module: str
     kind: DynamicKind
     lineno: int
     detail: str
+    shape: ArgShape = ArgShape.UNKNOWN
+    values: tuple[str, ...] = ()
+    """The literal(s) or prefix recovered from the call argument."""
+
+    package_arg: str | None = None
+    """The `package=` argument of `importlib.import_module`, when it was a literal."""
+
+    @property
+    def bounded(self) -> bool:
+        return self.shape is not ArgShape.UNKNOWN
 
 
 @dataclass
@@ -104,6 +128,8 @@ class Distribution:
     version: str
     top_level: set[str] = field(default_factory=set)
     files: list[Path] = field(default_factory=list)
+    entry_points: dict[str, dict[str, str]] = field(default_factory=dict)
+    """group -> {name: "module.path:attr"}."""
 
     @property
     def size_bytes(self) -> int:

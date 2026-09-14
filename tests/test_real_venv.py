@@ -79,3 +79,34 @@ def test_trace_promotes_lazy_import_to_observed(real_env: RealEnv):
     assert "rich.console" in result.modules
     traced = analyze([real_env.code], real_env.venv, Options(follow_lazy=False), trace=result)
     assert "rich.console" in traced.reach.reached
+
+
+def test_symbol_precision_rewrites_survive_a_real_import(real_env: RealEnv, tmp_path):
+    """Apply the phase-2 rewrites, delete everything freed, and prove the app still runs."""
+    from venvprune.rewrite import plan_rewrites
+
+    analysis = analyze([real_env.code], real_env.venv, Options(symbol_precision=True))
+    plans = plan_rewrites(analysis)
+    for plan in plans:
+        plan.apply(backup_suffix="")
+
+    after = analyze([real_env.code], real_env.venv, Options(symbol_precision=True))
+    graveyard = tmp_path / "sym-pruned"
+    moved = []
+    try:
+        for info in after.unused():
+            if not info.path.is_file():
+                continue
+            dest = graveyard / info.path.relative_to(real_env.site)
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            info.path.rename(dest)
+            moved.append((info.path, dest))
+
+        probe = "import sys; sys.path.insert(0, sys.argv[1]); import app; app.cli.name"
+        result = run_trace(real_env.python, ["-c", probe, str(real_env.code.parent)], timeout=120)
+        assert result.returncode == 0, "app broke after symbol-precision pruning"
+    finally:
+        for original, dest in moved:
+            dest.rename(original)
+        for plan in plans:
+            plan.path.write_text(plan.original, encoding="utf-8")

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import ast
 
-from venvprune.model import DynamicHint, DynamicKind, EdgeKind, ImportEdge, ModuleInfo
+from venvprune.model import Binding, Demand, DynamicHint, DynamicKind, EdgeKind, ImportEdge, ModuleInfo
 
 _IMPORTLIB_FUNCS = {"import_module", "__import__", "find_spec", "util.find_spec"}
 _PKGUTIL_FUNCS = {"iter_modules", "walk_packages", "get_loader", "resolve_name", "extend_path"}
@@ -23,6 +23,11 @@ class _Visitor(ast.NodeVisitor):
         self._pkgutil_aliases: set[str] = set()
         self._module_locals: set[str] = set()
         """Names bound to a module object, so `getattr(name, ...)` is a dynamic import risk."""
+
+        self.used: dict[str, set[str] | Demand] = {}
+        """Imported binding -> attributes read off it, or Demand.ALL for opaque use."""
+
+        self.exported: tuple[str, ...] | None = None
 
     # --- classification -------------------------------------------------
     def _kind(self) -> EdgeKind:
@@ -50,9 +55,19 @@ class _Visitor(ast.NodeVisitor):
     def visit_Import(self, node: ast.Import) -> None:
         kind = self._kind()
         for alias in node.names:
-            self.edges.append(ImportEdge(self.module, alias.name, kind, node.lineno))
             root = alias.name.split(".")[0]
             bound = alias.asname or root
+            # `import a.b` binds `a`, so attribute use is tracked against the root, not a.b.
+            self.edges.append(
+                ImportEdge(
+                    self.module,
+                    alias.name,
+                    kind,
+                    node.lineno,
+                    node.end_lineno or node.lineno,
+                    bindings=(Binding(bound, ""),),
+                )
+            )
             self._module_locals.add(bound)
             if root == "importlib":
                 self._importlib_aliases.add(bound)
@@ -66,11 +81,12 @@ class _Visitor(ast.NodeVisitor):
         names = tuple(a.name for a in node.names)
         if "*" in names:
             self.hints.append(DynamicHint(self.module, DynamicKind.IMPORT_STAR, node.lineno, f"from {target} import *"))
-        self.edges.append(ImportEdge(self.module, target, self._kind(), node.lineno, is_from=True, names=names))
-        for alias in node.names:
-            bound = alias.asname or alias.name
-            if bound != "*":
-                self._module_locals.add(bound)
+        bindings = tuple(Binding(alias.asname or alias.name, alias.name) for alias in node.names if alias.name != "*")
+        self.edges.append(
+            ImportEdge(self.module, target, self._kind(), node.lineno, is_from=True, names=names, bindings=bindings)
+        )
+        for binding in bindings:
+            self._module_locals.add(binding.local)
         if target == "importlib" or target.startswith("importlib."):
             self._importlib_aliases.update(a.asname or a.name for a in node.names)
         elif target == "pkgutil":
@@ -95,6 +111,35 @@ class _Visitor(ast.NodeVisitor):
                 self.visit(child)
             return
         self.generic_visit(node)
+
+    # --- usage ----------------------------------------------------------
+    def visit_Attribute(self, node: ast.Attribute) -> None:
+        base = node.value
+        if isinstance(base, ast.Name):
+            self._record(base.id, node.attr)
+            return
+        self.generic_visit(node)
+
+    def visit_Name(self, node: ast.Name) -> None:
+        # A bare reference that is not `name.attr` means the object escapes our sight.
+        self._record(node.id, None)
+
+    def visit_Assign(self, node: ast.Assign) -> None:
+        if self.exported is None and (names := _all_literal(node)) is not None:
+            self.exported = names
+        self.generic_visit(node)
+
+    def _record(self, name: str, attr: str | None) -> None:
+        current = self.used.get(name)
+        if current is Demand.ALL:
+            return
+        if attr is None:
+            self.used[name] = Demand.ALL
+            return
+        if current is None:
+            self.used[name] = {attr}
+        else:
+            current.add(attr)
 
     # --- dynamic hints --------------------------------------------------
     def visit_Call(self, node: ast.Call) -> None:
@@ -126,6 +171,15 @@ class _Visitor(ast.NodeVisitor):
 def _is_literal(args: list[ast.expr]) -> bool:
     """A constant attribute name is a plain lookup, not a dynamic dispatch."""
     return bool(args) and isinstance(args[0], ast.Constant)
+
+
+def _all_literal(node: ast.Assign) -> tuple[str, ...] | None:
+    if not any(isinstance(t, ast.Name) and t.id == "__all__" for t in node.targets):
+        return None
+    if not isinstance(node.value, ast.List | ast.Tuple):
+        return None
+    items = [e.value for e in node.value.elts if isinstance(e, ast.Constant) and isinstance(e.value, str)]
+    return tuple(items) if len(items) == len(node.value.elts) else None
 
 
 def _is_type_checking(test: ast.expr) -> bool:
@@ -171,6 +225,8 @@ def scan_module(info: ModuleInfo) -> ModuleInfo:
     visitor.visit(tree)
     info.edges = visitor.edges
     info.hints = visitor.hints
+    info.used_attrs = visitor.used
+    info.exported = visitor.exported
     return info
 
 

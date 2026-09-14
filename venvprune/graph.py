@@ -6,7 +6,7 @@ from collections import deque
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from venvprune.model import DynamicKind, EdgeKind, ImportEdge, ModuleInfo, Origin, Reachability
+from venvprune.model import Demand, DynamicKind, EdgeKind, ImportEdge, ModuleInfo, Origin, Reachability
 
 _CERTAINTY = {
     EdgeKind.EAGER: 3,
@@ -30,6 +30,9 @@ class Options:
     """Dev dependency groups to prune wholesale; `None` disables dev-group pruning."""
 
     pyproject: Path | None = None
+
+    symbol_precision: bool = False
+    """Follow a package `__init__`'s re-export only when the name it binds is actually used."""
 
 
 class ModuleGraph:
@@ -78,11 +81,30 @@ class ModuleGraph:
         reached: dict[str, EdgeKind] = {}
         why: dict[str, ImportEdge] = {}
         unresolved: list[ImportEdge] = []
+        demand: dict[str, set[str] | Demand] = {}
+        skipped: dict[str, list[ImportEdge]] = {}
         queue: deque[tuple[str, EdgeKind]] = deque()
+
+        def want(target: str, asked: set[str] | Demand) -> bool:
+            """Widen a module's demand set; True when it grew (so it must be re-walked)."""
+            current = demand.get(target)
+            if current is Demand.ALL:
+                return False
+            if asked is Demand.ALL:
+                demand[target] = Demand.ALL
+                return True
+            if current is None:
+                demand[target] = set(asked)
+                return True
+            if asked - current:
+                current |= asked
+                return True
+            return False
 
         for root in roots:
             if root in self.modules:
                 reached[root] = EdgeKind.EAGER
+                demand[root] = Demand.ALL
                 queue.append((root, EdgeKind.EAGER))
 
         while queue:
@@ -90,29 +112,70 @@ class ModuleGraph:
             info = self.modules.get(name)
             if info is None:
                 continue
-            targets: list[tuple[str, EdgeKind, ImportEdge | None]] = []
+            wanted = demand.get(name, Demand.ALL)
+            targets: list[tuple[str, EdgeKind, ImportEdge | None, set[str] | Demand]] = []
             for edge in info.edges:
                 if edge.kind not in allowed:
+                    continue
+                if opts.symbol_precision and not self._edge_is_wanted(info, edge, wanted):
+                    skipped.setdefault(name, []).append(edge)
                     continue
                 names, ok = self.resolve(edge)
                 if not ok:
                     unresolved.append(edge)
                 # An eager import inside a lazily-reached module is still only lazy overall.
                 kind = edge.kind if _CERTAINTY[edge.kind] < _CERTAINTY[incoming] else incoming
-                targets.extend((n, kind, edge) for n in names)
+                for target in names:
+                    targets.append((target, kind, edge, self._demand_for(info, edge, target, opts)))
             if opts.dynamic_expands_package and _has_dynamic(info):
                 for sibling in self.subtree(_package_of(info)):
-                    targets.append((sibling, EdgeKind.LAZY, None))
-            for target, kind, edge in targets:
-                previous = reached.get(target)
-                if previous is not None and _CERTAINTY[previous] >= _CERTAINTY[kind]:
-                    continue
-                reached[target] = kind
-                if edge is not None:
-                    why.setdefault(target, edge)
-                queue.append((target, kind))
+                    targets.append((sibling, EdgeKind.LAZY, None, Demand.ALL))
 
-        return Reachability(reached=reached, why=why, unresolved=unresolved)
+            for target, kind, edge, asked in targets:
+                grew = want(target, asked)
+                previous = reached.get(target)
+                stronger = previous is None or _CERTAINTY[previous] < _CERTAINTY[kind]
+                if not stronger and not grew:
+                    continue
+                if stronger:
+                    reached[target] = kind
+                    if edge is not None:
+                        why.setdefault(target, edge)
+                queue.append((target, reached[target]))
+
+        return Reachability(reached=reached, why=why, unresolved=unresolved, demand=demand, skipped_reexports=skipped)
+
+    def _edge_is_wanted(self, info: ModuleInfo, edge: ImportEdge, wanted: set[str] | Demand) -> bool:
+        """Under symbol precision, an `__init__` re-export survives only if someone needs it."""
+        if wanted is Demand.ALL or edge.kind is not EdgeKind.REEXPORT or not info.is_package:
+            return True
+        if not edge.bindings:
+            return True
+        # `__future__` changes how the file compiles, and a self/parent import is part of the
+        # package's own structure: neither is a re-export that can be dropped.
+        if edge.target == "__future__" or edge.target == info.name or info.name.startswith(f"{edge.target}."):
+            return True
+        # `__all__` membership alone does not justify a keep: libraries advertise everything.
+        # A live `from pkg import *` is what forces the whole surface, via Demand.ALL.
+        return any(b.local in wanted or b.local in info.used_attrs for b in edge.bindings)
+
+    def _demand_for(self, info: ModuleInfo, edge: ImportEdge, target: str, opts: Options) -> set[str] | Demand:
+        if not opts.symbol_precision:
+            return Demand.ALL
+        if target != edge.target:
+            # A parent package or a submodule pulled in alongside the named target.
+            return Demand.ALL if target.startswith(f"{edge.target}.") else set()
+        if edge.is_from:
+            if "*" in edge.names:
+                return Demand.ALL
+            # Names that name a submodule are satisfied by importing it, not by the package body.
+            attrs = {b.remote for b in edge.bindings if f"{target}.{b.remote}" not in self.modules}
+            return attrs or set()
+        binding = edge.bindings[0].local if edge.bindings else None
+        used = info.used_attrs.get(binding) if binding else None
+        if used is None or used is Demand.ALL:
+            return Demand.ALL
+        return set(used)
 
     def local_roots(self) -> list[str]:
         return [name for name, info in self.modules.items() if info.origin is Origin.LOCAL]

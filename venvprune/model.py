@@ -36,6 +36,20 @@ class DynamicKind(StrEnum):
     ENTRY_POINTS = "entry_points"
 
 
+class Demand(StrEnum):
+    ALL = "*"
+    """The module is used opaquely, so every name it exposes must keep working."""
+
+
+@dataclass(frozen=True)
+class Binding:
+    local: str
+    """The name this import binds in the importing module's namespace."""
+
+    remote: str
+    """The attribute fetched from the target (`""` for a plain `import x`)."""
+
+
 @dataclass(frozen=True)
 class ImportEdge:
     src: str
@@ -46,9 +60,13 @@ class ImportEdge:
 
     kind: EdgeKind
     lineno: int
+    end_lineno: int = 0
     is_from: bool = False
     names: tuple[str, ...] = ()
     """`from X import a, b` -> ("a", "b"); each may be a submodule or an attribute."""
+
+    bindings: tuple[Binding, ...] = ()
+    """What this statement puts into the importing module's namespace, for symbol precision."""
 
 
 @dataclass(frozen=True)
@@ -69,6 +87,11 @@ class ModuleInfo:
     edges: list[ImportEdge] = field(default_factory=list)
     hints: list[DynamicHint] = field(default_factory=list)
     parse_error: str | None = None
+    used_attrs: dict[str, set[str] | Demand] = field(default_factory=dict)
+    """Local binding -> the attributes this module actually reads off it."""
+
+    exported: tuple[str, ...] | None = None
+    """`__all__`, when declared as a literal list of strings."""
 
     @property
     def parent(self) -> str | None:
@@ -96,3 +119,8 @@ class Reachability:
     """Module -> the edge that first reached it, for `--explain`."""
 
     unresolved: list[ImportEdge]
+    demand: dict[str, set[str] | Demand] = field(default_factory=dict)
+    """Module -> the names anything actually asks of it."""
+
+    skipped_reexports: dict[str, list[ImportEdge]] = field(default_factory=dict)
+    """Package -> `__init__` imports skipped because nothing needed the names they bind."""

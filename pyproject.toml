@@ -1,0 +1,40 @@
+[project]
+name = "venvprune"
+version = "0.1.0"
+description = "Static analysis to find venv modules that the given code never needs"
+readme = "README.md"
+authors = [
+    { name = "KiviCode", email = "kivicode@yandex.com" }
+]
+requires-python = ">=3.12"
+dependencies = []
+
+[project.scripts]
+venvprune = "venvprune.cli:main"
+
+[dependency-groups]
+dev = [
+    "pytest>=8",
+    "ruff>=0.14",
+    "ty>=0.0.1a1",
+]
+
+[build-system]
+requires = ["uv_build>=0.10.0,<0.11.0"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-root = ""
+
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
+
+[tool.ty.environment]
+python-version = "3.12"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

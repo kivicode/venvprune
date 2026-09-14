@@ -1,0 +1,126 @@
+"""Import resolution and reachability over the combined local+venv module index."""
+
+from __future__ import annotations
+
+from collections import deque
+from dataclasses import dataclass, field
+
+from venvprune.model import DynamicKind, EdgeKind, ImportEdge, ModuleInfo, Origin, Reachability
+
+_CERTAINTY = {
+    EdgeKind.EAGER: 3,
+    EdgeKind.REEXPORT: 2,
+    EdgeKind.LAZY: 1,
+    EdgeKind.TYPE_ONLY: 0,
+}
+
+
+@dataclass
+class Options:
+    follow_lazy: bool = True
+    follow_type_only: bool = False
+    follow_reexport: bool = True
+    dynamic_expands_package: bool = True
+    """A reached module with dynamic-import hints keeps its whole sibling subtree."""
+
+    extra_roots: list[str] = field(default_factory=list)
+
+
+class ModuleGraph:
+    def __init__(self, modules: dict[str, ModuleInfo], stdlib: frozenset[str]) -> None:
+        self.modules = modules
+        self.stdlib = stdlib
+
+    def resolve(self, edge: ImportEdge) -> tuple[list[str], bool]:
+        """Return (module names this edge requires, whether anything resolved)."""
+        out: list[str] = []
+        target = edge.target
+        if target in self.modules:
+            out.extend(self._with_parents(target))
+        elif self._is_stdlib(target):
+            return [], True
+        if edge.is_from:
+            for name in edge.names:
+                if name == "*":
+                    continue
+                sub = f"{target}.{name}"
+                if sub in self.modules:
+                    out.extend(self._with_parents(sub))
+        return out, bool(out) or self._is_stdlib(target)
+
+    def _is_stdlib(self, dotted: str) -> bool:
+        return dotted.split(".")[0] in self.stdlib
+
+    def _with_parents(self, name: str) -> list[str]:
+        """A submodule cannot be imported without every parent package's `__init__`."""
+        parts = name.split(".")
+        return [".".join(parts[: i + 1]) for i in range(len(parts)) if ".".join(parts[: i + 1]) in self.modules]
+
+    def subtree(self, name: str) -> list[str]:
+        prefix = f"{name}."
+        return [m for m in self.modules if m == name or m.startswith(prefix)]
+
+    def reachable(self, roots: list[str], opts: Options) -> Reachability:
+        allowed = {EdgeKind.EAGER}
+        if opts.follow_lazy:
+            allowed.add(EdgeKind.LAZY)
+        if opts.follow_type_only:
+            allowed.add(EdgeKind.TYPE_ONLY)
+        if opts.follow_reexport:
+            allowed.add(EdgeKind.REEXPORT)
+
+        reached: dict[str, EdgeKind] = {}
+        why: dict[str, ImportEdge] = {}
+        unresolved: list[ImportEdge] = []
+        queue: deque[tuple[str, EdgeKind]] = deque()
+
+        for root in roots:
+            if root in self.modules:
+                reached[root] = EdgeKind.EAGER
+                queue.append((root, EdgeKind.EAGER))
+
+        while queue:
+            name, incoming = queue.popleft()
+            info = self.modules.get(name)
+            if info is None:
+                continue
+            targets: list[tuple[str, EdgeKind, ImportEdge | None]] = []
+            for edge in info.edges:
+                if edge.kind not in allowed:
+                    continue
+                names, ok = self.resolve(edge)
+                if not ok:
+                    unresolved.append(edge)
+                # An eager import inside a lazily-reached module is still only lazy overall.
+                kind = edge.kind if _CERTAINTY[edge.kind] < _CERTAINTY[incoming] else incoming
+                targets.extend((n, kind, edge) for n in names)
+            if opts.dynamic_expands_package and _has_dynamic(info):
+                for sibling in self.subtree(_package_of(info)):
+                    targets.append((sibling, EdgeKind.LAZY, None))
+            for target, kind, edge in targets:
+                previous = reached.get(target)
+                if previous is not None and _CERTAINTY[previous] >= _CERTAINTY[kind]:
+                    continue
+                reached[target] = kind
+                if edge is not None:
+                    why.setdefault(target, edge)
+                queue.append((target, kind))
+
+        return Reachability(reached=reached, why=why, unresolved=unresolved)
+
+    def local_roots(self) -> list[str]:
+        return [name for name, info in self.modules.items() if info.origin is Origin.LOCAL]
+
+    def unused_site_modules(self, reach: Reachability) -> list[ModuleInfo]:
+        return sorted(
+            (info for name, info in self.modules.items() if info.origin is Origin.SITE and name not in reach.reached),
+            key=lambda i: i.name,
+        )
+
+
+def _has_dynamic(info: ModuleInfo) -> bool:
+    return any(h.kind is not DynamicKind.ENTRY_POINTS for h in info.hints)
+
+
+def _package_of(info: ModuleInfo) -> str:
+    return info.name if info.is_package else (info.name.rpartition(".")[0] or info.name)

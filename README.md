@@ -97,8 +97,10 @@ Wheels ship binaries that no AST pass can see into:
 - **Unloadable builds** — when a wheel ships several builds of one module, only the one
   matching this interpreter's ABI tag can ever load; the rest are reported as dead weight.
 - **Bundled shared libraries** — `pkg/.dylibs` and `pkg.libs` are walked and attributed to the
-  extensions that link them (`otool -L` / `objdump -p`), so libraries no surviving extension
-  needs are listed.
+  extensions that link them, transitively, so a library needed only by another library is not
+  deleted out from under it. Link tables are read with the platform's own tool, batched:
+  `otool` on macOS, `objdump` or `readelf` on Linux, `dumpbin` or `objdump` on Windows. When
+  none is installed nothing is reported as unreferenced, so no library is removed.
 
 ## What it will not remove
 
@@ -175,6 +177,17 @@ uv run venvprune ./myapp --venv ./.venv --dry-run --format tree --tree-prunable
 A distribution nothing reaches goes whole — its package directories, its `dist-info`, its data
 files and its bundled shared libraries — not just the `.py` files the module graph knows about.
 Modules named by a `.pth` file are always kept, since the interpreter runs those at startup.
+
+## Speed
+
+A 12k-module virtualenv analyses in roughly 20 seconds. Parsing runs across processes — one per
+CPU by default, `-j N` to change it, `-j 1` to stay in-process; results are identical either
+way, and a pool that cannot start falls back rather than failing. `ast.parse` holds the GIL, so
+threads would buy nothing here.
+
+Two things that are not parallelism mattered more: a package root used to walk its entire
+parent directory (including the venv) before filtering by name, and link tables were read one
+subprocess per extension module.
 
 ## Progress
 

@@ -19,7 +19,13 @@ from pathlib import Path
 
 from venvprune.analysis.analyzer import Analysis
 from venvprune.model import Demand, ImportEdge
-from venvprune.scan.symbols import Definition, SymbolTable, dead_definitions, live_symbols
+from venvprune.scan.symbols import (
+    Definition,
+    SymbolTable,
+    dead_definitions,
+    live_symbols,
+    rewritable_statements,
+)
 
 _SHIM_HEADER = "# --- venvprune: lazily-removed re-exports ---"
 
@@ -202,6 +208,10 @@ def _build_definition_rewrite(
     live = live_symbols(table, demand, include_risky)
     original = path.read_text(encoding="utf-8", errors="replace")
     lines = original.splitlines(keepends=True)
+    try:
+        statements = rewritable_statements(ast.parse(original))
+    except SyntaxError:
+        return None
 
     # One statement can bind several names (`__version__ = version = "1.0"`); it may only go
     # when every name it binds is dead.
@@ -213,7 +223,7 @@ def _build_definition_rewrite(
         drop.update(definition.span)
 
     dead_imports: list[Definition] = []
-    for start, node in sorted(table.statements.items()):
+    for start, node in sorted(statements.items()):
         span, text = _narrow_statement(node, live)
         if span is None or span.stop > len(lines):
             continue

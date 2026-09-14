@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import ast
+from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures.process import BrokenProcessPool
 
 from venvprune.model import (
     ArgShape,
@@ -16,6 +18,9 @@ from venvprune.model import (
 )
 from venvprune.progress import Tracker
 from venvprune.scan.symbols import build_table
+
+_PARALLEL_FLOOR = 2_000
+_CHUNK = 128
 
 _IMPORTLIB_FUNCS = {"import_module", "__import__", "find_spec", "reload", "invalidate_caches"}
 _PKGUTIL_FUNCS = {"iter_modules", "walk_packages", "get_loader", "resolve_name", "extend_path"}
@@ -319,8 +324,29 @@ def scan_module(info: ModuleInfo) -> ModuleInfo:
     return info
 
 
-def scan_all(modules: dict[str, ModuleInfo], tracker: Tracker | None = None) -> None:
+def scan_all(modules: dict[str, ModuleInfo], tracker: Tracker | None = None, jobs: int = 1) -> None:
+    """Parse every module, across processes when asked.
+
+    `ast.parse` holds the GIL, so threads buy nothing here; processes do. The pool is only
+    worth its startup and pickling cost on a large venv, hence the floor.
+    """
+    if jobs > 1 and len(modules) >= _PARALLEL_FLOOR:
+        try:
+            _scan_parallel(modules, tracker, jobs)
+            return
+        except (OSError, ValueError, ImportError, BrokenProcessPool):
+            # Spawning can fail (a sandbox, a frozen build, an interpreter started from stdin).
+            # Falling back is slower but still correct, and every module is re-scanned in place.
+            pass
     for info in modules.values():
         scan_module(info)
         if tracker is not None:
             tracker.advance()
+
+
+def _scan_parallel(modules: dict[str, ModuleInfo], tracker: Tracker | None, jobs: int) -> None:
+    with ProcessPoolExecutor(max_workers=jobs) as pool:
+        for scanned in pool.map(scan_module, list(modules.values()), chunksize=_CHUNK):
+            modules[scanned.name] = scanned
+            if tracker is not None:
+                tracker.advance()

@@ -7,6 +7,7 @@ list settings (`keep`, `code`, `--root`, group names) add to what the file decla
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from pathlib import Path
 
@@ -44,6 +45,14 @@ def build_parser() -> argparse.ArgumentParser:
         choices=("text", "json", "paths", "tree", "rewrites", "defs", "deps", "risk", "native"),
         default=None,
         help="output format (default: text); `deps` audits the declared dependencies",
+    )
+    parser.add_argument(
+        "-j",
+        "--jobs",
+        type=int,
+        default=None,
+        metavar="N",
+        help="worker processes for parsing (default: one per CPU; 1 disables)",
     )
     parser.add_argument("-v", "--verbose", action="store_true", help="list individual modules and hint sites")
     parser.add_argument(
@@ -157,6 +166,7 @@ def _resolve(args: argparse.Namespace) -> tuple[list[Path], Path | None, Options
         dynamic_expands_package=pick(args.dynamic_expand, cfg, "dynamic-expand", True),
         extra_roots=config_mod.merge_list(args.extra_roots, cfg, "roots"),
         keep=tuple(config_mod.merge_list(args.keep, cfg, "keep")),
+        jobs=max(1, int(pick(args.jobs, cfg, "jobs", os.cpu_count() or 1))),
         symbol_precision=pick(args.symbols, cfg, "symbols", False) or prune_defs,
         prune_definitions=prune_defs,
         include_risky_definitions=pick(args.risky_defs, cfg, "risky-defs", False),

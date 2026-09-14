@@ -80,9 +80,6 @@ class SymbolTable:
     prunable: bool = True
     unsafe_reason: str = ""
     exported: tuple[str, ...] | None = None
-    statements: dict[int, ast.stmt] = field(default_factory=dict)
-    """Import and `__all__` statements by start line, so a rewrite can rebuild them narrowed."""
-
     pinned: frozenset[str] = frozenset()
     """Names that must never be removed, whatever references them."""
 
@@ -91,6 +88,22 @@ class SymbolTable:
 
     def all_definitions(self) -> list[Definition]:
         return [d for defs in self.definitions.values() for d in defs]
+
+
+def rewritable_statements(tree: ast.Module) -> dict[int, ast.stmt]:
+    """Top-level imports and `__all__`, by start line, for a rewrite to rebuild narrowed.
+
+    Kept out of `SymbolTable` so the table stays plain data: it crosses process boundaries
+    during a parallel scan, and AST nodes are expensive to send.
+    """
+    out: dict[int, ast.stmt] = {}
+    for node in tree.body:
+        is_all = isinstance(node, ast.Assign) and any(
+            isinstance(t, ast.Name) and t.id == "__all__" for t in node.targets
+        )
+        if isinstance(node, ast.Import | ast.ImportFrom) or is_all:
+            out[node.lineno] = node
+    return out
 
 
 def build_table(tree: ast.Module, hints_are_dynamic: bool = False) -> SymbolTable:
@@ -108,12 +121,10 @@ def build_table(tree: ast.Module, hints_are_dynamic: bool = False) -> SymbolTabl
             if isinstance(node, ast.ImportFrom) and node.module == "__future__":
                 # Dropping a __future__ import changes how the rest of the file compiles.
                 pinned.update(a.asname or a.name for a in node.names)
-            table.statements[node.lineno] = node
             for definition in _import_defs(node):
                 table.definitions.setdefault(definition.name, []).append(definition)
         elif (simple := _simple_assign(node)) is not None:
             if any(d.name == "__all__" for d in simple):
-                table.statements[node.lineno] = node
                 table.exported = _all_strings(node)
             for definition in simple:
                 table.definitions.setdefault(definition.name, []).append(definition)

@@ -193,9 +193,65 @@ def test_library_dependencies_are_followed_transitively(venv: Path, monkeypatch)
         "_imaging.cpython-312-darwin.so": ["@loader_path/.dylibs/libxcb.1.dylib"],
         "libxcb.1.dylib": ["@loader_path/libXau.6.dylib"],
     }
-    monkeypatch.setattr(native, "linked_libraries", lambda p: links.get(p.name, []))
+    monkeypatch.setattr(native, "link_reader", lambda: ("stub", ()))
+    monkeypatch.setattr(native, "linked_libraries_many", lambda ps: {p: links.get(p.name, []) for p in ps})
 
     libs = native.attribute_libraries([ext], native.bundled_libraries([venv]))
     assert libs["libxcb.1.dylib"].referenced_by, "linked straight from the extension"
     assert libs["libXau.6.dylib"].referenced_by == {"libxcb.1.dylib"}, "reached through libxcb"
     assert not libs["liborphan.1.dylib"].referenced_by, "nothing links it"
+
+
+def test_nothing_is_pruned_when_no_reader_is_installed(venv: Path, monkeypatch):
+    """Without otool/objdump/dumpbin, unreferenced cannot be distinguished from unknown."""
+    write_blob(venv / "pkg" / ".dylibs" / "libfoo.1.dylib", ["x"])
+    ext = venv / "pkg" / "_core.cpython-312-darwin.so"
+    write_blob(ext, ["x"])
+    monkeypatch.setattr(native, "link_reader", lambda: None)
+
+    libs = native.attribute_libraries([ext], native.bundled_libraries([venv]))
+    assert libs["libfoo.1.dylib"].referenced_by, "an unknown answer must keep the library"
+
+
+@pytest.mark.parametrize(
+    ("tool", "output", "expected"),
+    [
+        (
+            "otool",
+            "/p/ext.so:\n\t/p/ext.so (compat 1.0)\n\t/usr/lib/libSystem.B.dylib (compat 1.0)\n",
+            ["/usr/lib/libSystem.B.dylib"],
+        ),
+        ("objdump", "/p/ext.so:     file format elf64\n  NEEDED               libc.so.6\n", ["libc.so.6"]),
+        ("readelf", "File: /p/ext.so\n 0x01 (NEEDED) Shared library: [libm.so.6]\n", ["libm.so.6"]),
+        ("dumpbin", "Dump of file /p/ext.so\n\n    python312.dll\n", ["python312.dll"]),
+    ],
+)
+def test_each_reader_output_format_is_understood(tool: str, output: str, expected: list[str]):
+    target = Path("/p/ext.so")
+    out: dict[Path, list[str] | None] = {target: None}
+    native._parse(tool, output, {str(target): target}, out)
+    assert out[target] == expected
+
+
+def test_a_fat_binary_header_does_not_misattribute():
+    """`otool -L` repeats the header per architecture; the slices belong to one file."""
+    first, second = Path("/p/a.so"), Path("/p/b.so")
+    output = (
+        "/p/a.so (architecture x86_64):\n"
+        "\t/usr/lib/libA.dylib (compat 1.0)\n"
+        "/p/a.so (architecture arm64):\n"
+        "\t/usr/lib/libA.dylib (compat 1.0)\n"
+        "/p/b.so:\n"
+        "\t/usr/lib/libB.dylib (compat 1.0)\n"
+    )
+    out: dict[Path, list[str] | None] = {first: None, second: None}
+    native._parse("otool", output, {str(first): first, str(second): second}, out)
+    assert out[first] == ["/usr/lib/libA.dylib", "/usr/lib/libA.dylib"]
+    assert out[second] == ["/usr/lib/libB.dylib"], "b's deps must not land on a"
+
+
+def test_a_windows_path_is_not_split_on_its_drive_colon():
+    target = Path("C:/site-packages/pkg/_core.pyd")
+    out: dict[Path, list[str] | None] = {target: None}
+    native._parse("dumpbin", f"Dump of file {target}\n\n    python312.dll\n", {str(target): target}, out)
+    assert out[target] == ["python312.dll"]

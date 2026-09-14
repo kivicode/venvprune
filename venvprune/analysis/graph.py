@@ -46,6 +46,9 @@ class Options:
     keep_main_modules: bool = True
     """Keep `pkg/__main__.py` of a surviving package: `python -m pkg` never imports it."""
 
+    jobs: int = 1
+    """Worker processes used for parsing; 1 stays in-process."""
+
     keep: tuple[str, ...] = ()
     """Patterns for modules or distributions that must survive whatever the graph says."""
 

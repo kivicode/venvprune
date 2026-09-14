@@ -12,11 +12,13 @@ Three things no AST pass can see:
 from __future__ import annotations
 
 import re
+import shutil
 import subprocess
 import sys
 import sysconfig
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
+from functools import lru_cache
 from pathlib import Path
 
 from venvprune.model import ModuleInfo, Origin
@@ -154,26 +156,120 @@ def imports_from_binary(path: Path, known: Iterable[str], package: str = "", sib
     return found
 
 
+# Readers in preference order per platform. Each takes a list of files and is batched, since
+# one process per extension module dominates the run on a venv with hundreds of them.
+_READERS: dict[str, tuple[tuple[str, tuple[str, ...]], ...]] = {
+    "darwin": (("otool", ("-L",)), ("llvm-otool", ("-L",)), ("objdump", ("-p",))),
+    "linux": (("objdump", ("-p",)), ("readelf", ("-d",)), ("llvm-objdump", ("-p",))),
+    "win32": (("dumpbin", ("/nologo", "/dependents")), ("objdump", ("-p",)), ("llvm-objdump", ("-p",))),
+}
+_LINK_BATCH = 128
+
+
+@lru_cache(maxsize=1)
+def link_reader() -> tuple[str, tuple[str, ...]] | None:
+    """The first available reader for this platform, or None when none is installed.
+
+    None must be read as "unknown", never "no dependencies": without it every bundled library
+    looks unreferenced and would be deleted out from under a working extension.
+    """
+    family = "linux" if sys.platform.startswith("linux") else sys.platform
+    for name, flags in _READERS.get(family, ()):
+        found = shutil.which(name)
+        if found:
+            return found, flags
+    return None
+
+
+def missing_reader_hint() -> str:
+    family = "linux" if sys.platform.startswith("linux") else sys.platform
+    names = " or ".join(name for name, _ in _READERS.get(family, ())) or "a link-table reader"
+    return f"install {names} to let bundled shared libraries be pruned"
+
+
 def linked_libraries(path: Path) -> list[str]:
-    """Shared libraries an extension links against, as recorded in its load commands."""
-    if sys.platform == "darwin":
-        cmd = ["otool", "-L", str(path)]
-    elif sys.platform.startswith("linux"):
-        cmd = ["objdump", "-p", str(path)]
-    else:
-        return []
-    try:
-        proc = subprocess.run(cmd, capture_output=True, text=True, timeout=30, check=False)
-    except (OSError, subprocess.SubprocessError):
-        return []
-    out: list[str] = []
-    for line in proc.stdout.splitlines()[1:]:
-        line = line.strip()
-        if sys.platform == "darwin" and line and "(" in line:
-            out.append(line.split("(")[0].strip())
-        elif line.startswith("NEEDED"):
-            out.append(line.split()[-1])
+    """Shared libraries this binary links against; empty when nothing can read it."""
+    return linked_libraries_many([path]).get(path) or []
+
+
+def linked_libraries_many(paths: Sequence[Path]) -> dict[Path, list[str] | None]:
+    """Link tables for many files at once. A None value means nothing could read that file."""
+    reader = link_reader()
+    if not paths or reader is None:
+        return dict.fromkeys(paths)
+    command, flags = reader
+    tool = Path(command).name.lower()
+
+    out: dict[Path, list[str] | None] = dict.fromkeys(paths)
+    by_name = {str(p): p for p in paths}
+    for start in range(0, len(paths), _LINK_BATCH):
+        batch = paths[start : start + _LINK_BATCH]
+        try:
+            proc = subprocess.run(
+                [command, *flags, *(str(p) for p in batch)],
+                capture_output=True,
+                text=True,
+                timeout=300,
+                check=False,
+            )
+        except (OSError, subprocess.SubprocessError):
+            continue
+        _parse(tool, proc.stdout, by_name, out)
     return out
+
+
+def _parse(tool: str, text: str, by_name: dict[str, Path], out: dict[Path, list[str] | None]) -> None:
+    current: Path | None = None
+    names: list[str] = []
+    for raw in text.splitlines():
+        line = raw.strip()
+        if (found := _header(line, by_name)) is not None:
+            current = found
+            # A fat binary repeats its header per architecture; keep appending to one list.
+            existing = out.get(found)
+            names = existing if existing is not None else []
+            out[current] = names
+            continue
+        if current is None or not line:
+            continue
+        if (name := _dependency(tool, line, current)) is not None:
+            names.append(name)
+
+
+def _dependency(tool: str, line: str, owner: Path) -> str | None:
+    if "otool" in tool:
+        name = line.split("(")[0].strip() if "(" in line else ""
+        # `otool -L` opens with the file's own install name, which is not a dependency.
+        return name if name and not name.endswith(owner.name) else None
+    if "readelf" in tool:
+        if "(NEEDED)" in line and "[" in line:
+            return line.split("[", 1)[1].split("]", 1)[0]
+        return None
+    if line.startswith("NEEDED"):
+        return line.split()[-1]
+    if "dumpbin" in tool and line.lower().endswith(".dll"):
+        return line
+    return None
+
+
+def _header(line: str, by_name: dict[str, Path]) -> Path | None:
+    """Spot the line each reader prints before a file's dependencies.
+
+    The four shapes are `path:` (otool), `path:  file format ...` (objdump), `File: path`
+    (readelf) and `Dump of file path` (dumpbin). A Windows path contains a colon of its own,
+    so the filename is matched against the batch rather than split on punctuation.
+    """
+    for prefix in ("Dump of file ", "File: "):
+        if line.startswith(prefix) and (name := line.removeprefix(prefix).strip()) in by_name:
+            return by_name[name]
+    if line in by_name:
+        return by_name[line]
+    for name, path in by_name.items():
+        # `path:`, `path:  file format ...`, and a fat binary's `path (architecture arm64):`.
+        rest = line[len(name) :] if line.startswith(name) else None
+        if rest is not None and (rest.startswith(":") or rest.startswith(" (")):
+            return path
+    return None
 
 
 @dataclass
@@ -211,32 +307,38 @@ def attribute_libraries(
     deleted out from under a library that is still loaded.
     """
     if not libs:
-        # Nothing to attribute, so skip the one `otool`/`objdump` call per extension.
         return libs
-    pending: list[tuple[str, str]] = []
-    for ext in kept_extensions:
+    extensions = list(kept_extensions)
+    if link_reader() is None:
+        # Nothing can be shown to be unreferenced here, so nothing may be removed.
+        for lib in libs.values():
+            lib.referenced_by.add(f"(unreadable: {missing_reader_hint()})")
+        return libs
+
+    pending: list[str] = []
+    for ext, links in linked_libraries_many(extensions).items():
         if tracker is not None:
             tracker.advance()
-        for link in linked_libraries(ext):
-            name = link.rsplit("/", 1)[-1]
+        for link in links or ():
+            name = link.rsplit("/", 1)[-1].rsplit("\\", 1)[-1]
             if name in libs:
                 libs[name].referenced_by.add(ext.name)
-                pending.append((name, ext.name))
+                pending.append(name)
 
     seen: set[str] = set()
     while pending:
-        name, _ = pending.pop()
-        if name in seen:
-            continue
-        seen.add(name)
+        frontier = [n for n in dict.fromkeys(pending) if n not in seen]
+        pending = []
+        seen.update(frontier)
         if tracker is not None:
-            tracker.advance()
-        for link in linked_libraries(libs[name].path):
-            dep = link.rsplit("/", 1)[-1]
-            if dep in libs and dep != name:
-                libs[dep].referenced_by.add(name)
-                if dep not in seen:
-                    pending.append((dep, name))
+            tracker.advance(len(frontier))
+        for lib, links in linked_libraries_many([libs[n].path for n in frontier]).items():
+            for link in links or ():
+                dep = link.rsplit("/", 1)[-1].rsplit("\\", 1)[-1]
+                if dep in libs and dep != lib.name:
+                    libs[dep].referenced_by.add(lib.name)
+                    if dep not in seen:
+                        pending.append(dep)
     return libs
 
 

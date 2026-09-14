@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import sys
 import sysconfig
 import zipfile
@@ -48,13 +49,14 @@ def find_site_packages(venv: Path) -> list[Path]:
 
 
 def _iter_python_files(root: Path) -> Iterator[Path]:
-    for path in root.rglob("*"):
-        if path.is_dir():
-            continue
-        if any(part in _SKIP_DIRS for part in path.relative_to(root).parts):
-            continue
-        if path.suffix in _SOURCE_SUFFIXES or path.name.endswith(_EXT_SUFFIXES):
-            yield path
+    """Walk for importable files, pruning whole directories rather than filtering each file."""
+    for parent, dirnames, filenames in os.walk(root):
+        # Editing dirnames in place is what stops os.walk descending; a nested virtualenv is
+        # somebody else's site-packages, never part of the code being analysed.
+        dirnames[:] = [d for d in dirnames if d not in _SKIP_DIRS and not (Path(parent, d) / "pyvenv.cfg").exists()]
+        for name in filenames:
+            if name.endswith(_SOURCE_SUFFIXES) or name.endswith(_EXT_SUFFIXES):
+                yield Path(parent, name)
 
 
 def _module_name(root: Path, path: Path) -> str | None:
@@ -78,13 +80,24 @@ def _module_name(root: Path, path: Path) -> str | None:
     return ".".join(parts)
 
 
-def index_root(root: Path, origin: Origin, prefix: str = "", tracker: Tracker | None = None) -> dict[str, ModuleInfo]:
-    """Map dotted module name -> ModuleInfo for every module found under `root`."""
+def index_root(
+    root: Path,
+    origin: Origin,
+    prefix: str = "",
+    tracker: Tracker | None = None,
+    anchor: Path | None = None,
+) -> dict[str, ModuleInfo]:
+    """Map dotted module name -> ModuleInfo for every module found under `root`.
+
+    `anchor` is what dotted names are measured from, which lets a package directory be walked
+    on its own while still being named `pkg.sub` rather than `sub`.
+    """
+    anchor = anchor or root
     modules: dict[str, ModuleInfo] = {}
     for path in _iter_python_files(root):
         if tracker is not None:
             tracker.advance()
-        name = _module_name(root, path)
+        name = _module_name(anchor, path)
         if name is None:
             continue
         if prefix:
@@ -107,7 +120,7 @@ def index_root(root: Path, origin: Origin, prefix: str = "", tracker: Tracker | 
     for name in list(modules):
         parent = name.rpartition(".")[0]
         while parent and parent not in modules:
-            dir_path = root / Path(*parent.split(".")[len(prefix.split(".")) if prefix else 0 :])
+            dir_path = anchor / Path(*parent.split(".")[len(prefix.split(".")) if prefix else 0 :])
             modules[parent] = ModuleInfo(parent, dir_path, origin, is_package=True)
             parent = parent.rpartition(".")[0]
     return modules
@@ -118,16 +131,14 @@ def index_code_roots(roots: list[Path], tracker: Tracker | None = None) -> dict[
     for root in roots:
         root = root.resolve()
         if root.is_file():
-            base, keep = root.parent, None
+            walk, anchor = root.parent, root.parent
         elif (root / "__init__.py").exists():
-            # A package dir given directly (`src/mypkg`) is anchored at its parent so its own
-            # name stays in the dotted path, but only that package is indexed.
-            base, keep = root.parent, root.name
+            # A package given directly (`src/mypkg`) keeps its own name in the dotted path, so
+            # names are anchored at the parent -- but only the package itself is walked.
+            walk, anchor = root, root.parent
         else:
-            base, keep = root, None
-        for name, info in index_root(base, Origin.LOCAL, tracker=tracker).items():
-            if keep is not None and name.split(".")[0] != keep:
-                continue
+            walk, anchor = root, root
+        for name, info in index_root(walk, Origin.LOCAL, tracker=tracker, anchor=anchor).items():
             modules.setdefault(name, info)
     return modules
 

@@ -135,7 +135,7 @@ def analyze(
         merged[name] = info
 
     scan_task = reporter.task("Parsing", total=len(merged))
-    astscan.scan_all(merged, scan_task)
+    astscan.scan_all(merged, scan_task, jobs=options.jobs)
     scan_task.done()
     if options.scan_binaries:
         _add_binary_edges(merged, reporter)

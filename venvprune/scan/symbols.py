@@ -83,6 +83,14 @@ class SymbolTable:
     pinned: frozenset[str] = frozenset()
     """Names that must never be removed, whatever references them."""
 
+    lazy_submodules: bool = False
+    """`__getattr__` is a PEP 562 submodule loader, so `pkg.name` means the module `pkg.name`.
+
+    Several large libraries (scipy, and increasingly others) import their subpackages this way.
+    Read as an opaque dynamic site it makes the whole distribution unprunable; read as the
+    lookup table it is, a demand for one name reaches exactly one submodule.
+    """
+
     def names(self) -> set[str]:
         return set(self.definitions)
 
@@ -106,7 +114,7 @@ def rewritable_statements(tree: ast.Module) -> dict[int, ast.stmt]:
     return out
 
 
-def build_table(tree: ast.Module, hints_are_dynamic: bool = False) -> SymbolTable:
+def build_table(tree: ast.Module, hints_are_dynamic: bool = False, module: str = "") -> SymbolTable:
     table = SymbolTable()
     side_effects: set[str] = set()
     pinned: set[str] = set()
@@ -134,7 +142,9 @@ def build_table(tree: ast.Module, hints_are_dynamic: bool = False) -> SymbolTabl
     table.side_effect_refs = frozenset(side_effects)
     table.pinned = frozenset(pinned)
     if "__getattr__" in table.definitions:
-        unsafe = "module defines __getattr__, so any name may be produced on demand"
+        table.lazy_submodules = _is_submodule_loader(tree, module)
+        if not table.lazy_submodules:
+            unsafe = "module defines __getattr__, so any name may be produced on demand"
     elif hints_are_dynamic:
         unsafe = "module performs dynamic imports"
     else:
@@ -157,6 +167,46 @@ def _all_strings(node: ast.stmt) -> tuple[str, ...] | None:
         return None
     items = [e.value for e in value.elts if isinstance(e, ast.Constant) and isinstance(e.value, str)]
     return tuple(items) if len(items) == len(value.elts) else None
+
+
+def _is_submodule_loader(tree: ast.Module, module: str) -> bool:
+    """Does `__getattr__` do nothing but turn its argument into a submodule of this package?"""
+    if not module:
+        return False
+    for node in tree.body:
+        if not isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef) or node.name != "__getattr__":
+            continue
+        params = [a.arg for a in node.args.args]
+        if len(params) != 1:
+            return False
+        return any(_imports_own_submodule(call, params[0], module) for call in ast.walk(node))
+    return False
+
+
+def _imports_own_submodule(node: ast.AST, param: str, module: str) -> bool:
+    if not isinstance(node, ast.Call) or not node.args:
+        return False
+    leaf = _leaf_name(node.func)
+    if leaf not in {"import_module", "__import__"}:
+        return False
+    arg = node.args[0]
+    names = {n.id for n in ast.walk(arg) if isinstance(n, ast.Name)}
+    if param not in names:
+        return False
+    # The name it builds must be rooted at this package, not somewhere else entirely.
+    prefix = _literal_head(arg)
+    return prefix in {f"{module}.", ".", ""} or (prefix.endswith(".") and module.startswith(prefix[:-1]))
+
+
+def _literal_head(expr: ast.expr) -> str:
+    if isinstance(expr, ast.JoinedStr):
+        head = expr.values[0] if expr.values else None
+        return head.value if isinstance(head, ast.Constant) and isinstance(head.value, str) else ""
+    if isinstance(expr, ast.BinOp) and isinstance(expr.op, ast.Add):
+        return _literal_head(expr.left)
+    if isinstance(expr, ast.Constant) and isinstance(expr.value, str):
+        return expr.value
+    return ""
 
 
 def _function_def(node: ast.FunctionDef | ast.AsyncFunctionDef) -> Definition:

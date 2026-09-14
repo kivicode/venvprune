@@ -8,6 +8,7 @@ from venvprune.analysis.analyzer import analyze
 from venvprune.analysis.graph import Options
 from venvprune.analysis.risk import Severity, assess, package_risk
 from venvprune.model import ArgShape
+from venvprune.scan.symbols import SymbolTable
 
 from .conftest import write
 
@@ -176,3 +177,62 @@ def test_dynamic_expansion_does_not_cross_into_a_shadowed_package(tmp_path: Path
     unused = {i.name for i in analysis.unused()}
     assert "tests.test_vendor" in unused, "the wheel's own test is shadowed and unimportable"
     assert "vendored" in unused, "and so is what it alone imported"
+
+
+def test_pep562_lazy_loader_resolves_to_the_named_submodule(tmp_path: Path):
+    """scipy-style `__getattr__` is a submodule table, not an unknowable dynamic site."""
+    site = tmp_path / "venv" / "lib" / "python3.12" / "site-packages"
+    write(
+        site / "sci" / "__init__.py",
+        "import importlib as _importlib\n\n"
+        "submodules = ['linalg', 'io', 'odr']\n\n\n"
+        "def __getattr__(name):\n"
+        "    if name in submodules:\n"
+        "        return _importlib.import_module(f'sci.{name}')\n"
+        "    raise AttributeError(name)\n",
+    )
+    for sub in ("linalg", "io", "odr"):
+        write(site / "sci" / sub / "__init__.py", "")
+    write(tmp_path / "code" / "app.py", "import sci\n\nsci.linalg.solve()\n")
+
+    analysis = analyze([tmp_path / "code"], tmp_path / "venv", Options(symbol_precision=True))
+    table = analysis.modules["sci"].table
+    assert isinstance(table, SymbolTable) and table.lazy_submodules
+    unused = {i.name for i in analysis.unused()}
+    assert "sci.linalg" not in unused, "the attribute access names the submodule"
+    assert {"sci.io", "sci.odr"} <= unused, "the others are never asked for"
+
+
+def test_getattr_reaches_children_not_a_whole_subtree(tmp_path: Path):
+    """`getattr(pkg, name)` reads an attribute, so it cannot reach a grandchild."""
+    site = tmp_path / "venv" / "lib" / "python3.12" / "site-packages"
+    write(site / "big" / "__init__.py", "import big.helper\n\n\ndef pick(n):\n    return getattr(big, n)\n")
+    write(site / "big" / "helper.py", "")
+    write(site / "big" / "child" / "__init__.py", "")
+    write(site / "big" / "child" / "grandchild.py", "")
+    write(tmp_path / "code" / "app.py", "import big\n")
+
+    unused = _unused(tmp_path)
+    assert "big.child" not in unused, "an immediate submodule could be the attribute"
+    assert "big.child.grandchild" in unused, "a grandchild is not an attribute of big"
+
+
+def test_a_library_bundled_test_suite_is_not_reached_dynamically(tmp_path: Path):
+    """A library's dynamic lookups want its plugins, not its own tests."""
+    site = tmp_path / "venv" / "lib" / "python3.12" / "site-packages"
+    write(site / "lib" / "__init__.py", "import pkgutil\n\n\ndef load():\n    return list(pkgutil.walk_packages())\n")
+    write(site / "lib" / "real.py", "")
+    write(site / "lib" / "tests" / "__init__.py", "")
+    write(site / "lib" / "tests" / "test_api.py", "import heavy\n")
+    write(site / "lib" / "testing" / "__init__.py", "")
+    write(site / "heavy" / "__init__.py", "")
+    write(tmp_path / "code" / "app.py", "import lib\n")
+
+    unused = _unused(tmp_path)
+    assert "lib.real" not in unused
+    assert "lib.testing" not in unused, "`testing` is a public API, unlike `tests`"
+    assert "lib.tests.test_api" in unused
+    assert "heavy" in unused, "and what the bundled test alone imported goes too"
+
+    loose = _unused(tmp_path, Options(follow_vendored_tests=True))
+    assert "lib.tests.test_api" not in loose

@@ -33,6 +33,7 @@ _KEYS = {
     "prune-dev",
     "scan-binaries",
     "strict-dynamic",
+    "follow-vendored-tests",
     "jobs",
     "keep-main-modules",
     "keep-distributions",

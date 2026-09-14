@@ -32,6 +32,8 @@ class RiskSite:
     hint: DynamicHint
     severity: Severity
     candidates: tuple[str, ...]
+    holds: int = 0
+    """Modules this site alone keeps alive, i.e. what bounding it would free."""
 
     @property
     def location(self) -> str:
@@ -52,15 +54,18 @@ def assess(analysis: Analysis) -> list[RiskSite]:
         resolved = graph.resolve_hint(info, hint)
         if resolved is None:
             severity = Severity.OPEN
-            candidates: tuple[str, ...] = ()
-        elif hint.kind in _CONFINED_KINDS and not hint.bounded:
+            candidates = ()
+            held = len(graph.dynamic_targets(info, analysis.options))
+            sites.append(RiskSite(hint, severity, candidates, held))
+            continue
+        if hint.kind in _CONFINED_KINDS and not hint.bounded:
             severity = Severity.CONFINED
             candidates = tuple(sorted(resolved))
         else:
             severity = Severity.RESOLVED
             candidates = tuple(sorted(resolved))
-        sites.append(RiskSite(hint, severity, candidates))
-    return sorted(sites, key=lambda s: (-s.severity, s.hint.module, s.hint.lineno))
+        sites.append(RiskSite(hint, severity, candidates, len(candidates)))
+    return sorted(sites, key=lambda s: (-s.severity, -s.holds, s.hint.module, s.hint.lineno))
 
 
 def package_risk(sites: list[RiskSite]) -> dict[str, Severity]:
@@ -82,6 +87,13 @@ def render(sites: list[RiskSite], verbose: bool = False) -> str:
     for severity in sorted(Severity, reverse=True):
         lines.append(f"  {severity.label:<9} {counts[severity]}")
     lines.append("")
+
+    costly = [s for s in sites if s.severity is Severity.OPEN and s.holds]
+    if costly:
+        lines.append("Unbounded sites holding the most modules (--strict-dynamic drops these):")
+        for site in costly[:10]:
+            lines.append(f"  {site.holds:>5} modules  {site.location}  {site.hint.detail}")
+        lines.append("")
 
     risky = package_risk(sites)
     unsafe = sorted(p for p, s in risky.items() if s is Severity.OPEN)

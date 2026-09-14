@@ -82,8 +82,20 @@ folded as far as it can be:
 | `import_module("." + n, __package__)`   | the importing package's subtree       |
 | `import_module(name)`                   | unbounded — the whole package is kept |
 
+Three shapes that used to cost far more than they should:
+
+- a **PEP 562 lazy loader** (`__getattr__` calling `import_module(f"pkg.{name}")`, as scipy and
+  others ship) is read as the submodule table it is, so asking for one name reaches one
+  submodule rather than making the whole distribution unprunable;
+- `getattr(pkg, name)` reaches an **immediate submodule**, never a whole subtree — one such
+  call in `scipy/conftest.py` was keeping all 1098 scipy modules alive;
+- a library's dynamic lookups do not reach its **own bundled test suite** (`pkg/tests/…`, but
+  not `pkg/testing/`, which is a public API). `--follow-vendored-tests` restores the old
+  behaviour.
+
 `--strict-dynamic` keeps nothing for a site that stays unbounded. `--format risk` rates every
-site `resolved` / `confined` / `open` and names the packages that cannot be pruned safely.
+site `resolved` / `confined` / `open`, and ranks the unbounded ones by how many modules each
+single site is holding, so the expensive ones are visible rather than guessed at.
 
 Entry points are read from `dist-info` and become roots when your code calls `entry_points()`
 with a literal group, or when you pass `--entry-point-group`.

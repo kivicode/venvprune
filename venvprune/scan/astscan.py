@@ -320,7 +320,7 @@ def scan_module(info: ModuleInfo) -> ModuleInfo:
     info.used_attrs = visitor.used
     info.exported = visitor.exported
     dynamic = any(h.kind is not DynamicKind.ENTRY_POINTS for h in visitor.hints)
-    info.table = build_table(tree, hints_are_dynamic=dynamic)
+    info.table = build_table(tree, hints_are_dynamic=dynamic, module=info.name)
     return info
 
 

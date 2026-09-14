@@ -46,6 +46,9 @@ class Options:
     keep_main_modules: bool = True
     """Keep `pkg/__main__.py` of a surviving package: `python -m pkg` never imports it."""
 
+    follow_vendored_tests: bool = False
+    """Let a library's dynamic imports reach its own bundled test suite."""
+
     jobs: int = 1
     """Worker processes used for parsing; 1 stays in-process."""
 
@@ -101,6 +104,16 @@ class ModuleGraph:
         """A submodule cannot be imported without every parent package's `__init__`."""
         parts = name.split(".")
         return [".".join(parts[: i + 1]) for i in range(len(parts)) if ".".join(parts[: i + 1]) in self.modules]
+
+    def children(self, name: str, origin: Origin | None = None) -> list[str]:
+        """A package and its immediate submodules, which is all an attribute lookup can yield."""
+        prefix = f"{name}."
+        return [
+            m
+            for m, info in self.modules.items()
+            if (m == name or (m.startswith(prefix) and "." not in m[len(prefix) :]))
+            and (origin is None or info.origin is origin)
+        ]
 
     def subtree(self, name: str, origin: Origin | None = None) -> list[str]:
         """Modules under a dotted name, optionally only those from the same place.
@@ -176,6 +189,13 @@ class ModuleGraph:
                 kind = edge.kind if _CERTAINTY[edge.kind] < _CERTAINTY[incoming] else incoming
                 for target in names:
                     targets.append((target, kind, edge, self._demand_for(info, edge, target, opts, wanted)))
+            if _lazy_loader(info):
+                # `pkg.__getattr__(name)` resolves to the module `pkg.name`, so a narrowed
+                # demand reaches exactly those submodules instead of the whole package.
+                for demanded in wanted if isinstance(wanted, set) else ():
+                    child = f"{name}.{demanded}"
+                    if child in self.modules:
+                        targets.append((child, incoming, None, Demand.ALL))
             if opts.dynamic_expands_package:
                 for candidate in self.dynamic_targets(info, opts):
                     targets.append((candidate, EdgeKind.LAZY, None, Demand.ALL))
@@ -197,8 +217,13 @@ class ModuleGraph:
     def dynamic_targets(self, info: ModuleInfo, opts: Options) -> set[str]:
         """Modules that a module's dynamic-import sites could plausibly load."""
         out: set[str] = set()
+        own_tests = _vendored_test(info.name)
+        lazy = _lazy_loader(info)
         for hint in info.hints:
             if hint.kind is DynamicKind.ENTRY_POINTS:
+                continue
+            if lazy and hint.kind is DynamicKind.IMPORTLIB:
+                # Its own loader is already handled by name, so it is not an open-ended site.
                 continue
             resolved = self.resolve_hint(info, hint)
             if resolved is None:
@@ -207,14 +232,20 @@ class ModuleGraph:
                 out.update(self.subtree(_package_of(info), info.origin))
             else:
                 out.update(resolved)
+        if not opts.follow_vendored_tests and not own_tests:
+            # A library looking up submodules dynamically wants its plugins, not its own test
+            # suite; one such call in scipy reached scipy._lib.tests, which imports everything.
+            out = {m for m in out if not _vendored_test(m)}
         return out
 
     def resolve_hint(self, info: ModuleInfo, hint: DynamicHint) -> set[str] | None:
         """Candidate modules for one dynamic site, or None when it cannot be bounded."""
         anchor = hint.package_arg or _package_of(info)
         if hint.kind is DynamicKind.GETATTR_MODULE:
-            # `getattr(pkg, name)` can only reach what is already under that package.
-            return set(self.subtree(_package_of(info), info.origin))
+            # `getattr(pkg, name)` reads an attribute, so it reaches an immediate submodule at
+            # most -- never a whole subtree. One such call in scipy/conftest.py was keeping all
+            # 1098 scipy modules alive.
+            return set(self.children(_package_of(info), info.origin))
         if hint.kind is DynamicKind.PKGUTIL:
             return set(self.subtree(_package_of(info), info.origin))
         if not hint.bounded:
@@ -307,6 +338,18 @@ class ModuleGraph:
             (info for name, info in self.modules.items() if info.origin is Origin.SITE and name not in reach.reached),
             key=lambda i: i.name,
         )
+
+
+_TEST_SEGMENTS = {"tests", "test", "conftest"}
+
+
+def _vendored_test(name: str) -> bool:
+    """A test suite shipped inside a library. `numpy.testing` is a public API, not this."""
+    return any(part in _TEST_SEGMENTS for part in name.split(".")[1:])
+
+
+def _lazy_loader(info: ModuleInfo) -> bool:
+    return isinstance(info.table, SymbolTable) and info.table.lazy_submodules
 
 
 def _package_of(info: ModuleInfo) -> str:

@@ -39,6 +39,12 @@ def render_text(analysis: Analysis, verbose: bool = False) -> str:
         lines.append(f"runtime-traced     : {len(analysis.traced)} modules kept by trace evidence")
     lines.append("")
 
+    if analysis.dev_only:
+        lines.append(f"Dev-only distributions pruned wholesale ({len(analysis.dev_only)}):")
+        lines.append(f"  {', '.join(sorted(analysis.dev_only))}")
+        lines.append(f"  ({len(analysis.dev_forced)} otherwise-reachable modules dropped with them)")
+        lines.append("")
+
     dists = analysis.fully_unused_distributions()
     if dists:
         lines.append(f"Distributions with no reachable module ({len(dists)}):")
@@ -110,6 +116,8 @@ def render_json(analysis: Analysis) -> str:
         ],
         "unresolved": sorted({e.target for e in analysis.reach.unresolved}),
         "traced_modules": sorted(analysis.traced),
+        "dev_only_distributions": sorted(analysis.dev_only),
+        "dev_forced_modules": sorted(analysis.dev_forced),
     }
     return json.dumps(payload, indent=2)
 

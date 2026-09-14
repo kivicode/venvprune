@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections import deque
 from dataclasses import dataclass, field
+from pathlib import Path
 
 from venvprune.model import DynamicKind, EdgeKind, ImportEdge, ModuleInfo, Origin, Reachability
 
@@ -24,6 +25,11 @@ class Options:
     """A reached module with dynamic-import hints keeps its whole sibling subtree."""
 
     extra_roots: list[str] = field(default_factory=list)
+
+    prune_dev_groups: tuple[str, ...] | None = None
+    """Dev dependency groups to prune wholesale; `None` disables dev-group pruning."""
+
+    pyproject: Path | None = None
 
 
 class ModuleGraph:

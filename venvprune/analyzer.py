@@ -6,7 +6,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from venvprune import astscan, discovery
+from venvprune import astscan, discovery, projectmeta
 from venvprune.graph import ModuleGraph, Options
 from venvprune.model import Distribution, DynamicHint, EdgeKind, ModuleInfo, Origin, Reachability
 from venvprune.trace import TraceResult, site_relative_names
@@ -20,16 +20,32 @@ class Analysis:
     site_dirs: list[Path]
     distributions: Mapping[str, Distribution]
     traced: set[str] = field(default_factory=set)
+    dist_of: Mapping[str, str] = field(default_factory=dict)
+    """Module name -> owning distribution (canonical name)."""
+
+    dev_only: set[str] = field(default_factory=set)
+    """Distributions declared only in a dev group, minus those the code imports directly."""
+
+    dev_forced: set[str] = field(default_factory=set)
+    """Modules pruned because they belong to a dev-only distribution, despite being reachable."""
+
+    project: projectmeta.ProjectMeta | None = None
 
     @property
     def modules(self) -> dict[str, ModuleInfo]:
         return self.graph.modules
 
     def unused(self) -> list[ModuleInfo]:
-        return self.graph.unused_site_modules(self.reach)
+        base = self.graph.unused_site_modules(self.reach)
+        if not self.dev_forced:
+            return base
+        extra = [self.modules[n] for n in self.dev_forced if n in self.modules]
+        return sorted({i.name: i for i in [*base, *extra]}.values(), key=lambda i: i.name)
 
     def kept(self, kind: EdgeKind) -> list[str]:
-        return sorted(n for n, k in self.reach.reached.items() if k is kind and self._is_site(n))
+        return sorted(
+            n for n, k in self.reach.reached.items() if k is kind and self._is_site(n) and n not in self.dev_forced
+        )
 
     def _is_site(self, name: str) -> bool:
         info = self.modules.get(name)
@@ -40,7 +56,7 @@ class Analysis:
         for name, info in self.modules.items():
             if info.origin is Origin.STDLIB:
                 continue
-            if reached_only and name not in self.reach.reached:
+            if reached_only and (name not in self.reach.reached or name in self.dev_forced):
                 continue
             hints.extend(info.hints)
         return sorted(hints, key=lambda h: (h.module, h.lineno))
@@ -97,14 +113,76 @@ def analyze(
                 if parent in merged:
                     reach.reached.setdefault(parent, EdgeKind.EAGER)
 
-    return Analysis(
+    dist_of = _map_modules_to_dists(merged, dists)
+    analysis = Analysis(
         graph=graph,
         reach=reach,
         options=options,
         site_dirs=site_dirs,
         distributions=dists,
         traced=traced,
+        dist_of=dist_of,
     )
+
+    if options.prune_dev_groups is not None:
+        _apply_dev_prune(analysis, code_roots, venv, options)
+    return analysis
+
+
+def _map_modules_to_dists(modules: Mapping[str, ModuleInfo], dists: Mapping[str, Distribution]) -> dict[str, str]:
+    """Resolve ownership by file path, since two dists can share a top-level namespace."""
+    by_path: dict[Path, str] = {}
+    for name, dist in dists.items():
+        canon = projectmeta.canonical(name)
+        for file in dist.files:
+            by_path[file] = canon
+    out: dict[str, str] = {}
+    for name, info in modules.items():
+        if info.origin is not Origin.SITE:
+            continue
+        owner = by_path.get(info.path.resolve())
+        if owner is None:
+            top = name.split(".")[0]
+            owner = next(
+                (projectmeta.canonical(d) for d, dist in dists.items() if top in dist.top_level),
+                None,
+            )
+        if owner is not None:
+            out[name] = owner
+    return out
+
+
+def _apply_dev_prune(analysis: Analysis, code_roots: list[Path], venv: Path, options: Options) -> None:
+    pyproject = options.pyproject or next(
+        (p for root in [*code_roots, venv.parent] if (p := projectmeta.find_pyproject(root))), None
+    )
+    if pyproject is None:
+        return
+    meta = projectmeta.read_project(pyproject)
+    analysis.project = meta
+    dev_only = meta.dev_only(options.prune_dev_groups or projectmeta.DEFAULT_DEV_GROUPS)
+    protected = _dists_imported_by_local_code(analysis)
+    analysis.dev_only = dev_only - protected
+    analysis.dev_forced = {
+        name
+        for name, owner in analysis.dist_of.items()
+        if owner in analysis.dev_only and name in analysis.reach.reached
+    }
+
+
+def _dists_imported_by_local_code(analysis: Analysis) -> set[str]:
+    """Distributions named by an import statement written in the user's own code."""
+    protected: set[str] = set()
+    for info in analysis.modules.values():
+        if info.origin is not Origin.LOCAL:
+            continue
+        for edge in info.edges:
+            for candidate in _self_and_parents(edge.target):
+                owner = analysis.dist_of.get(candidate)
+                if owner is not None:
+                    protected.add(owner)
+                    break
+    return protected
 
 
 def _self_and_parents(name: str) -> list[str]:

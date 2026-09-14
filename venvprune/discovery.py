@@ -108,10 +108,18 @@ def index_root(root: Path, origin: Origin, prefix: str = "") -> dict[str, Module
 def index_code_roots(roots: list[Path]) -> dict[str, ModuleInfo]:
     modules: dict[str, ModuleInfo] = {}
     for root in roots:
-        # A package dir given directly (`src/mypkg`) is indexed from its parent so
-        # that its own name stays part of the dotted path.
-        base = root.parent if (root / "__init__.py").exists() else root
-        for name, info in index_root(base.resolve(), Origin.LOCAL).items():
+        root = root.resolve()
+        if root.is_file():
+            base, keep = root.parent, None
+        elif (root / "__init__.py").exists():
+            # A package dir given directly (`src/mypkg`) is anchored at its parent so its own
+            # name stays in the dotted path, but only that package is indexed.
+            base, keep = root.parent, root.name
+        else:
+            base, keep = root, None
+        for name, info in index_root(base, Origin.LOCAL).items():
+            if keep is not None and name.split(".")[0] != keep:
+                continue
             modules.setdefault(name, info)
     return modules
 

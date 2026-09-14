@@ -38,3 +38,4 @@ python-version = "3.12"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = ["integration: builds a real virtualenv with uv (slower, needs network on first run)"]

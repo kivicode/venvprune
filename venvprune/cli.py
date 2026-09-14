@@ -6,9 +6,10 @@ import argparse
 import sys
 from pathlib import Path
 
-from venvprune import report
+from venvprune import report, tree
 from venvprune.analyzer import analyze
 from venvprune.graph import Options
+from venvprune.projectmeta import DEFAULT_DEV_GROUPS
 from venvprune.trace import run_trace, venv_python
 
 
@@ -20,7 +21,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("code", nargs="+", type=Path, help="code root(s) to analyse")
     parser.add_argument("--venv", required=True, type=Path, help="virtualenv (or site-packages) to prune")
     parser.add_argument(
-        "--format", choices=("text", "json", "paths"), default="text", help="output format (default: text)"
+        "--format",
+        choices=("text", "json", "paths", "tree"),
+        default="text",
+        help="output format (default: text)",
     )
     parser.add_argument("-v", "--verbose", action="store_true", help="list individual modules and hint sites")
     parser.add_argument(
@@ -41,6 +45,27 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="do not keep a whole package just because it performs dynamic imports",
     )
+
+    viz = parser.add_argument_group("tree view")
+    viz.add_argument("--tree-depth", type=int, default=3, help="tree nesting depth (default: 3)")
+    viz.add_argument("--tree-prunable", action="store_true", help="show only branches containing prunable modules")
+    viz.add_argument("--color", choices=("auto", "always", "never"), default="auto", help="colourise the tree")
+
+    dev = parser.add_argument_group("dev dependencies")
+    dev.add_argument(
+        "--prune-dev",
+        action="store_true",
+        help="also prune distributions declared only in a dev group, unless your code imports them",
+    )
+    dev.add_argument(
+        "--dev-group",
+        dest="dev_groups",
+        action="append",
+        default=[],
+        metavar="NAME",
+        help=f"dev group name to treat as prunable (repeatable; default: {', '.join(DEFAULT_DEV_GROUPS)})",
+    )
+    dev.add_argument("--pyproject", type=Path, default=None, help="pyproject.toml to read groups from")
 
     tracing = parser.add_argument_group("runtime tracing")
     tracing.add_argument(
@@ -68,6 +93,8 @@ def main(argv: list[str] | None = None) -> int:
         follow_reexport=not args.no_reexport,
         dynamic_expands_package=not args.no_dynamic_expand,
         extra_roots=list(args.extra_roots),
+        prune_dev_groups=(tuple(args.dev_groups) or DEFAULT_DEV_GROUPS) if args.prune_dev else None,
+        pyproject=args.pyproject,
     )
 
     trace_result = None
@@ -88,11 +115,21 @@ def main(argv: list[str] | None = None) -> int:
         print(f"venvprune: {exc}", file=sys.stderr)
         return 2
 
-    renderers = {"text": report.render_text, "json": report.render_json, "paths": report.render_paths}
     if args.format == "text":
         print(report.render_text(analysis, verbose=args.verbose))
+    elif args.format == "tree":
+        print(
+            tree.render_tree(
+                analysis,
+                max_depth=args.tree_depth,
+                only_prunable=args.tree_prunable,
+                color={"auto": None, "always": True, "never": False}[args.color],
+            )
+        )
+    elif args.format == "json":
+        print(report.render_json(analysis))
     else:
-        print(renderers[args.format](analysis))
+        print(report.render_paths(analysis))
     return 0
 
 

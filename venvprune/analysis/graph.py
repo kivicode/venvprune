@@ -99,9 +99,20 @@ class ModuleGraph:
         parts = name.split(".")
         return [".".join(parts[: i + 1]) for i in range(len(parts)) if ".".join(parts[: i + 1]) in self.modules]
 
-    def subtree(self, name: str) -> list[str]:
+    def subtree(self, name: str, origin: Origin | None = None) -> list[str]:
+        """Modules under a dotted name, optionally only those from the same place.
+
+        Two distributions -- or a code root and a wheel -- can both own a top-level name;
+        `html-for-docx` ships its own `tests` package. At runtime whichever comes first on
+        sys.path owns the namespace and the other's submodules are unimportable, so a package
+        must never reach across that boundary into files it cannot actually load.
+        """
         prefix = f"{name}."
-        return [m for m in self.modules if m == name or m.startswith(prefix)]
+        return [
+            m
+            for m, info in self.modules.items()
+            if (m == name or m.startswith(prefix)) and (origin is None or info.origin is origin)
+        ]
 
     def reachable(self, roots: list[str], opts: Options) -> Reachability:
         self.options = opts
@@ -190,7 +201,7 @@ class ModuleGraph:
             if resolved is None:
                 if opts.strict_dynamic:
                     continue
-                out.update(self.subtree(_package_of(info)))
+                out.update(self.subtree(_package_of(info), info.origin))
             else:
                 out.update(resolved)
         return out
@@ -200,9 +211,9 @@ class ModuleGraph:
         anchor = hint.package_arg or _package_of(info)
         if hint.kind is DynamicKind.GETATTR_MODULE:
             # `getattr(pkg, name)` can only reach what is already under that package.
-            return set(self.subtree(_package_of(info)))
+            return set(self.subtree(_package_of(info), info.origin))
         if hint.kind is DynamicKind.PKGUTIL:
-            return set(self.subtree(_package_of(info)))
+            return set(self.subtree(_package_of(info), info.origin))
         if not hint.bounded:
             return None
         out: set[str] = set()

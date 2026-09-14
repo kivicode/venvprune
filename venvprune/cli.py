@@ -12,7 +12,7 @@ from pathlib import Path
 
 from venvprune import config as config_mod
 from venvprune import progress
-from venvprune.analysis import risk
+from venvprune.analysis import deps, risk
 from venvprune.analysis.analyzer import Analysis, analyze
 from venvprune.analysis.graph import Options
 from venvprune.edit import apply as apply_mod
@@ -41,9 +41,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--no-config", action="store_true", help="ignore any [tool.venvprune] section")
     parser.add_argument(
         "--format",
-        choices=("text", "json", "paths", "tree", "rewrites", "defs", "risk", "native"),
+        choices=("text", "json", "paths", "tree", "rewrites", "defs", "deps", "risk", "native"),
         default=None,
-        help="output format (default: text)",
+        help="output format (default: text); `deps` audits the declared dependencies",
     )
     parser.add_argument("-v", "--verbose", action="store_true", help="list individual modules and hint sites")
     parser.add_argument(
@@ -182,6 +182,8 @@ def _render(
                 show_diff=args.diff,
             )
         )
+    elif output == "deps":
+        print(deps.render(deps.assess(analysis, args.pyproject or cfg.path), verbose=args.verbose))
     elif output == "risk":
         print(risk.render(risk.assess(analysis), verbose=args.verbose))
     elif output == "rewrites":

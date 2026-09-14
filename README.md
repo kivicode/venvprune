@@ -119,6 +119,26 @@ default, and each one was learned by pruning a real project and then running it:
 Sizes are reported per module, and every file backing one goes together: `cu2qu.py`,
 `cu2qu.cpython-312-darwin.so` and `cu2qu.pyi` are one module, not three.
 
+## Auditing the declarations (`--format deps`)
+
+A different question from module pruning: not "can this file go" but "is this line in
+`pyproject.toml` earning its place". Each declared dependency — main, extras and groups — is
+classified against what the analysed code actually imports:
+
+| status | meaning |
+| --- | --- |
+| `used` | imported by first-party code |
+| `indirect` | reachable, but only because another package imports it — you are relying on someone else's dependency |
+| `unused` | nothing reaches it at all |
+| `missing` | declared but not installed |
+| `conditional` | not installed, but an environment marker excludes this platform |
+
+Distributions are mapped to modules through `RECORD`, never by guessing from the name, because
+they often differ — `html-for-docx` installs `html4docx`.
+
+Point it at the production roots only (leave `tests/` out) and a dependency used solely by the
+test suite shows up as `unused`, which is usually a sign it belongs in a dev group.
+
 ## Dev dependencies (`--prune-dev`)
 
 Distributions declared only in a dev group are not needed to run the code, so they are pruned

@@ -159,3 +159,20 @@ def test_pth_import_is_a_root(tmp_path: Path):
     unused = _unused(tmp_path)
     assert "_startup" not in unused, ".pth files run before anything else"
     assert "unrelated" in unused
+
+
+def test_dynamic_expansion_does_not_cross_into_a_shadowed_package(tmp_path: Path):
+    """A wheel that ships a top-level `tests` package must not be kept alive by yours."""
+    site = tmp_path / "venv" / "lib" / "python3.12" / "site-packages"
+    write(site / "tests" / "__init__.py", "")
+    write(site / "tests" / "test_vendor.py", "import vendored\n")
+    write(site / "vendored" / "__init__.py", "")
+
+    code = tmp_path / "tests"
+    write(code / "__init__.py", "")
+    write(code / "test_mine.py", "import importlib\n\n\ndef load(name):\n    return importlib.import_module(name)\n")
+
+    analysis = analyze([code], tmp_path / "venv")
+    unused = {i.name for i in analysis.unused()}
+    assert "tests.test_vendor" in unused, "the wheel's own test is shadowed and unimportable"
+    assert "vendored" in unused, "and so is what it alone imported"
